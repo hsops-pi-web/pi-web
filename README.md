@@ -29,6 +29,72 @@ pi-web -p 8080 -H 127.0.0.1     # 组合使用
 PORT=8080 pi-web                 # 也支持环境变量
 ```
 
+## 使用 systemctl 管理服务
+
+推荐使用用户级 systemd 服务运行 `pi-web`，这样服务会以当前用户身份读取 `~/.pi/agent` 下的会话和模型配置。
+
+先全局安装并确认 `pi-web` 的绝对路径：
+
+```bash
+npm install -g @agegr/pi-web
+command -v pi-web
+command -v node
+```
+
+创建用户级服务文件：
+
+```bash
+mkdir -p ~/.config/systemd/user
+nano ~/.config/systemd/user/pi-web.service
+```
+
+写入以下内容，并把 `ExecStart` 改成 `command -v pi-web` 输出的绝对路径：
+
+```ini
+[Unit]
+Description=Pi Agent Web
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pi-web --hostname 0.0.0.0 --port 30141
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
+```
+
+启用并启动服务：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now pi-web
+```
+
+常用管理命令：
+
+```bash
+systemctl --user status pi-web
+systemctl --user restart pi-web
+systemctl --user stop pi-web
+journalctl --user -u pi-web -f
+```
+
+如果需要开机后即使未登录也自动启动用户服务：
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+更新服务版本：
+
+```bash
+npm install -g @agegr/pi-web@latest
+systemctl --user restart pi-web
+```
+
 ## 功能介绍
 
 - **会话浏览器** — 按工作目录分组展示所有 pi 会话
