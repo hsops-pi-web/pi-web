@@ -82,6 +82,16 @@ export interface AttachedImage {
   previewUrl: string;
 }
 
+async function readApiError(res: Response): Promise<string> {
+  try {
+    const data = await res.json() as { error?: unknown };
+    if (typeof data.error === "string" && data.error) return data.error;
+  } catch {
+    // fall through to generic HTTP error
+  }
+  return `HTTP ${res.status}`;
+}
+
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
@@ -367,7 +377,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
           }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readApiError(res));
         const result = await res.json() as { sessionId: string };
         const realId = result.sessionId;
         sessionIdRef.current = realId;
@@ -392,6 +402,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to send message:", e);
+      setError(e instanceof Error ? e.message : String(e));
       setAgentRunning(false);
       setAgentPhase(null);
       dispatch({ type: "end" });

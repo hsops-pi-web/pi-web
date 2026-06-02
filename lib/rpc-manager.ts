@@ -1,4 +1,6 @@
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { existsSync, readdirSync, statSync } from "fs";
+import { delimiter, join, resolve } from "path";
 import { cacheSessionPath } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 
@@ -12,6 +14,81 @@ export interface AgentEvent {
 }
 
 type EventListener = (event: AgentEvent) => void;
+
+const BUILTIN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+const EXTENSION_ENTRY_FILES = ["index.ts", "index.js", "index.mjs", "index.cjs"];
+const EXTENSION_FILE_RE = /\.(?:ts|js|mjs|cjs)$/;
+
+function isBuiltinTool(tool: ToolInfo): boolean {
+  if (tool.sourceInfo?.source) return tool.sourceInfo.source === "builtin";
+  return BUILTIN_TOOL_NAMES.has(tool.name);
+}
+
+function withExtensionTools(inner: AgentSessionLike, toolNames: string[]): string[] {
+  if (toolNames.length === 0) return [];
+  const extensionToolNames = inner
+    .getAllTools()
+    .filter((tool) => !isBuiltinTool(tool))
+    .map((tool) => tool.name);
+  return [...new Set([...toolNames, ...extensionToolNames])];
+}
+
+function setActiveTools(inner: AgentSessionLike, toolNames: string[]): void {
+  inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
+  if (toolNames.length === 0 && inner.agent.state) {
+    inner.agent.state.systemPrompt = "";
+  }
+}
+
+function isExtensionFile(path: string): boolean {
+  return EXTENSION_FILE_RE.test(path) && !path.endsWith(".d.ts");
+}
+
+function collectExtensionPaths(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const stat = statSync(root);
+  if (stat.isFile()) return isExtensionFile(root) ? [root] : [];
+  if (!stat.isDirectory()) return [];
+
+  const collected: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const entryPath = join(root, entry.name);
+    if (entry.isFile() && isExtensionFile(entryPath)) {
+      collected.push(entryPath);
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+
+    const entryFile = EXTENSION_ENTRY_FILES
+      .map((fileName) => join(entryPath, fileName))
+      .find((candidate) => existsSync(candidate));
+    if (entryFile) {
+      collected.push(entryFile);
+    } else if (existsSync(join(entryPath, "package.json"))) {
+      collected.push(entryPath);
+    }
+  }
+  return collected;
+}
+
+function getExtraExtensionPaths(): string[] {
+  const paths = new Set<string>();
+  const webProjectExtensions = join(process.cwd(), ".pi", "extensions");
+  for (const extensionPath of collectExtensionPaths(webProjectExtensions)) {
+    paths.add(extensionPath);
+  }
+
+  const configured = process.env.PI_WEB_EXTENSION_PATHS;
+  if (configured) {
+    for (const rawPath of configured.split(delimiter)) {
+      const trimmed = rawPath.trim();
+      if (!trimmed) continue;
+      paths.add(trimmed.startsWith(".") ? resolve(process.cwd(), trimmed) : trimmed);
+    }
+  }
+
+  return [...paths];
+}
 
 // ============================================================================
 // AgentSessionWrapper
@@ -208,7 +285,7 @@ export class AgentSessionWrapper {
       }
 
       case "set_tools": {
-        this.inner.setActiveToolsByName(command.toolNames as string[]);
+        setActiveTools(this.inner, command.toolNames as string[]);
         return null;
       }
 
@@ -286,32 +363,45 @@ export async function startRpcSession(
   if (inflight) return inflight;
 
   const starting = (async () => {
-    const { SessionManager, getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const { SessionManager, getAgentDir, DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
     const agentDir = getAgentDir();
 
     const sessionManager = sessionFile
       ? SessionManager.open(sessionFile, undefined)
       : SessionManager.create(cwd, undefined);
+    const extraExtensionPaths = getExtraExtensionPaths();
+    const settingsManager = extraExtensionPaths.length > 0 ? SettingsManager.create(cwd, agentDir) : undefined;
+    const resourceLoader = extraExtensionPaths.length > 0
+      ? new DefaultResourceLoader({
+          cwd,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: extraExtensionPaths,
+        })
+      : undefined;
+    if (resourceLoader) await resourceLoader.reload();
 
     // Determine which tools to pass based on requested toolNames.
-    // Since v0.68.0, createAgentSession expects string[] tool names instead of Tool[] instances.
-    // Pass all built-in coding tool names by default; for "all off", pass empty array.
-    const allCodingToolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+    // Do not pass a non-empty built-in allowlist at creation time: that prevents
+    // extension tools from being loaded into the session. For Low/High presets,
+    // create with defaults and narrow active tools after extension discovery.
     let toolsOption: string[] | undefined;
     if (toolNames !== undefined) {
-      toolsOption = toolNames.length === 0 ? [] : allCodingToolNames;
+      toolsOption = toolNames.length === 0 ? [] : undefined;
     }
 
     const { session: inner } = await createAgentSession({
       cwd,
       agentDir,
       sessionManager,
+      ...(settingsManager ? { settingsManager } : {}),
+      ...(resourceLoader ? { resourceLoader } : {}),
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
     });
 
     // If specific tool names were requested (non-empty), narrow active tools now
     if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(toolNames);
+      setActiveTools(inner, toolNames);
     }
 
     // When all tools are disabled, clear the system prompt entirely.

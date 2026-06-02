@@ -14,6 +14,11 @@ export interface ModelLike {
 export interface ToolInfo {
   name: string;
   description: string;
+  sourceInfo?: {
+    source?: string;
+    scope?: string;
+    path?: string;
+  };
 }
 
 export interface NavigateTreeResult {
