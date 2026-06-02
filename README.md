@@ -139,3 +139,4 @@ lib/
 ```
 
 会话文件存储路径：`~/.pi/agent/sessions/<编码后的工作目录>/<时间戳>_<uuid>.jsonl`
+pi的skill存放路径: `~/.pi/agent/skills/`
