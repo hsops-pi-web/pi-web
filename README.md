@@ -29,6 +29,86 @@ pi-web -p 8080 -H 127.0.0.1     # 组合使用
 PORT=8080 pi-web                 # 也支持环境变量
 ```
 
+## 配置本地 AI 模型
+
+本地模型建议使用 OpenAI-compatible 接口接入，例如 Ollama、LM Studio、vLLM、SGLang 或 LiteLLM。`baseUrl` 可以直接使用 `http://`，不要求 HTTPS。
+
+在网页里点击侧边栏底部的 **Models**，添加自定义 provider：
+
+- **Provider name**：例如 `local-openai` 或 `ollama`
+- **Base URL**：例如 `http://127.0.0.1:11434/v1`、`http://127.0.0.1:1234/v1`
+- **API**：选择 `openai-completions`
+- **API Key**：本地服务没有真实密钥时也需要填一个占位值，例如 `local`、`dummy`、`ollama`
+- **Model ID**：必须和本地服务暴露的模型 id 一致，例如 `qwen2.5-coder:7b`
+
+也可以直接编辑 `~/.pi/agent/models.json`：
+
+```bash
+mkdir -p ~/.pi/agent
+nano ~/.pi/agent/models.json
+```
+
+最小示例：
+
+```json
+{
+  "providers": {
+    "local-openai": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b",
+          "name": "Qwen2.5 Coder 7B (Local)"
+        }
+      ]
+    }
+  }
+}
+```
+
+`apiKey` 字段不能省略，否则模型不会出现在可选列表里；但对不需要鉴权的本地服务，它只是占位字符串，服务端通常会忽略。普通字符串会先按环境变量名解析，环境变量不存在时就按字面值使用，所以 `local`、`dummy` 都可以。
+
+如果本地 OpenAI-compatible 服务不支持 `developer` role 或 `reasoning_effort`，可以加兼容配置：
+
+```json
+{
+  "providers": {
+    "local-openai": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b",
+          "name": "Qwen2.5 Coder 7B (Local)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 32768,
+          "maxTokens": 8192
+        }
+      ]
+    }
+  }
+}
+```
+
+如果希望新会话默认使用本地模型，可编辑 `~/.pi/agent/settings.json`：
+
+```json
+{
+  "defaultProvider": "local-openai",
+  "defaultModel": "qwen2.5-coder:7b"
+}
+```
+
+通过 Models 面板保存后通常不需要重启服务；刷新页面或重新打开模型下拉即可看到新模型。已有会话需要在输入栏模型下拉中切换，新会话才会使用新的默认模型。
+
 ## 使用 systemctl 管理服务
 
 推荐使用用户级 systemd 服务运行 `pi-web`，这样服务会以当前用户身份读取 `~/.pi/agent` 下的会话和模型配置。
