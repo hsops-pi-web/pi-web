@@ -17,10 +17,10 @@ interface ModelOption {
 }
 
 interface Props {
-  onSend: (message: string, images?: AttachedImage[], files?: File[]) => void;
+  onSend: (message: string, images?: AttachedImage[], files?: File[]) => boolean | Promise<boolean>;
   onAbort: () => void;
-  onSteer?: (message: string, images?: AttachedImage[], files?: File[]) => void;
-  onFollowUp?: (message: string, images?: AttachedImage[], files?: File[]) => void;
+  onSteer?: (message: string, images?: AttachedImage[], files?: File[]) => boolean | Promise<boolean>;
+  onFollowUp?: (message: string, images?: AttachedImage[], files?: File[]) => boolean | Promise<boolean>;
   isStreaming: boolean;
   model?: { provider: string; modelId: string } | null;
   modelNames?: Record<string, string>;
@@ -209,11 +209,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     setFileError(null);
   }, []);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const msg = value.trim();
     if (!canSend) return;
     if (isStreaming) return;
-    onSend(msg, attachedImages.length ? attachedImages : undefined, attachedFiles.length ? attachedFiles.map((a) => a.file) : undefined);
+    const sent = await onSend(msg, attachedImages.length ? attachedImages : undefined, attachedFiles.length ? attachedFiles.map((a) => a.file) : undefined);
+    if (!sent) return;
     setValue("");
     clearImages();
     clearFiles();
@@ -222,15 +223,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     }
   }, [value, canSend, attachedImages, attachedFiles, isStreaming, onSend, clearImages, clearFiles]);
 
-  const sendQueued = useCallback((mode: "steer" | "followup") => {
+  const sendQueued = useCallback(async (mode: "steer" | "followup") => {
     const msg = value.trim();
     if (!canSend) return;
     const files = attachedFiles.length ? attachedFiles.map((a) => a.file) : undefined;
+    let sent = false;
     if (mode === "steer" && onSteer) {
-      onSteer(msg, attachedImages.length ? attachedImages : undefined, files);
+      sent = await onSteer(msg, attachedImages.length ? attachedImages : undefined, files);
     } else if (mode === "followup" && onFollowUp) {
-      onFollowUp(msg, attachedImages.length ? attachedImages : undefined, files);
+      sent = await onFollowUp(msg, attachedImages.length ? attachedImages : undefined, files);
     }
+    if (!sent) return;
     setValue("");
     clearImages();
     clearFiles();

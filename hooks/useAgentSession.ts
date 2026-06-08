@@ -348,8 +348,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
-    if (!message.trim() && !images?.length && !files?.length) return;
-    if (agentRunning) return;
+    if (!message.trim() && !images?.length && !files?.length) return false;
+    if (agentRunning) return false;
 
     const cwd = isNew ? newSessionCwd : session?.cwd;
     let finalMessage: string;
@@ -357,7 +357,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       finalMessage = await buildMessageWithFiles(message, cwd ?? undefined, files);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      return;
+      return false;
     }
 
     const imageBlocks = images?.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mimeType, data: img.data } }));
@@ -418,12 +418,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(piImages?.length ? { images: piImages } : {}),
         });
       }
+      return true;
     } catch (e) {
       console.error("Failed to send message:", e);
       setError(e instanceof Error ? e.message : String(e));
       setAgentRunning(false);
       setAgentPhase(null);
       dispatch({ type: "end" });
+      return false;
     }
   }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, buildMessageWithFiles, connectEvents, onSessionCreated]);
 
@@ -507,13 +509,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleSteer = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
     let finalMessage: string;
     try {
       finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      return;
+      return false;
     }
     setMessages((prev) => [...prev, { role: "user", content: `[steer] ${finalMessage}`, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -523,21 +525,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message: finalMessage,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to steer:", e);
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }, [buildMessageWithFiles, session?.cwd]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
     let finalMessage: string;
     try {
       finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      return;
+      return false;
     }
     setMessages((prev) => [...prev, { role: "user", content: finalMessage, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -547,9 +551,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message: finalMessage,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to follow up:", e);
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }, [buildMessageWithFiles, session?.cwd]);
 
