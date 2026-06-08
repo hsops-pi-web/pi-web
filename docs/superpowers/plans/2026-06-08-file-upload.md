@@ -858,6 +858,15 @@ git checkout main
 git merge --no-ff feat/file-upload -m "feat: support document upload (word/excel/pdf/ppt/text/markdown)"
 ```
 
+- [ ] **步骤 4：重新构建并重启正式服务（发布时必需）**
+
+```bash
+npm run build
+systemctl --user restart pi-web.service
+```
+
+说明：正式服务使用 `next start` 读取 `.next/` 产物。合并到 `main` 后如果不重新 build，重启服务仍可能运行旧构建。
+
 ---
 
 ## 自检结论

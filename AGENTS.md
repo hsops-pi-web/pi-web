@@ -10,6 +10,8 @@ Typecheck: `node_modules/.bin/tsc --noEmit`
 Lint: `node node_modules/next/dist/bin/next lint`  
 **Never run `next build` during dev** — pollutes `.next/` and breaks `npm run dev`.
 
+Production publish after merging to `main`: run `npm run build` first, then restart `pi-web.service`. The systemd service uses `next start`, so a restart alone keeps serving the old `.next/` build.
+
 ---
 
 ## Architecture

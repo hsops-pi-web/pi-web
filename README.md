@@ -175,6 +175,16 @@ npm install -g @agegr/pi-web@latest
 systemctl --user restart pi-web
 ```
 
+本仓库本地开发合并到 `main` 后发布到 systemd 服务时，需要先重新生成生产构建产物，再重启服务：
+
+```bash
+git checkout main
+npm run build
+systemctl --user restart pi-web
+```
+
+`pi-web.service` 使用 `next start` 读取 `.next/` 下的生产构建。仅合并代码并重启服务不会重新编译页面和 API，仍可能继续运行旧构建。
+
 ## 功能介绍
 
 - **会话浏览器** — 按工作目录分组展示所有 pi 会话

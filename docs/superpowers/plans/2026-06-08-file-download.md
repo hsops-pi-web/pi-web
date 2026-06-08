@@ -1,6 +1,6 @@
 # 文件下载功能 实现计划
 
-> 面向 AI 代理的工作者：按任务逐项实现，每项完成后做本地审查和提交。用户验证 OK 后再合并回 `main`，最后通过 `systemctl --user restart pi-web.service` 重启正式服务。
+> 面向 AI 代理的工作者：按任务逐项实现，每项完成后做本地审查和提交。用户验证 OK 后再合并回 `main`，必须先 `npm run build` 重新生成 `.next/` 生产构建，再通过 `systemctl --user restart pi-web.service` 重启正式服务。
 
 **目标：** 让用户可以从 Web 界面直接下载 agent 生成或修改后的文件，不再需要 agent 启动临时 HTTP 服务。
 
@@ -66,4 +66,5 @@
 - [ ] 用户验证文件查看器下载按钮
 - [ ] 用户验证聊天路径下载入口
 - [ ] 用户确认 OK 后合并回 `main`
+- [ ] `npm run build`
 - [ ] `systemctl --user restart pi-web.service`

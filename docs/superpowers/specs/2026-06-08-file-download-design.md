@@ -1,7 +1,7 @@
 # 文件下载功能设计
 
 日期: 2026-06-08
-分支: `feat/file-download`（用户验证通过后合并回 `main`，再用 systemd 重启服务）
+分支: `feat/file-download`（用户验证通过后合并回 `main`，先重新 build，再用 systemd 重启服务）
 
 ## 背景
 
@@ -95,4 +95,7 @@ Accept-Ranges: bytes
 2. 开发并提交
 3. 启动 dev 服务给用户验证
 4. 用户验证 OK 后合并回 `main`
-5. 用 `systemctl --user restart pi-web.service` 重启正式服务
+5. 运行 `npm run build` 重新生成 `.next/` 生产构建
+6. 用 `systemctl --user restart pi-web.service` 重启正式服务
+
+说明：正式服务通过 `next start` 运行 `.next/` 产物；只合并源码并重启 systemd 不会自动编译新功能。

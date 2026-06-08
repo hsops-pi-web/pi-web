@@ -193,3 +193,7 @@ steer / followUp 同样携带文档（与图片对称）。
 1. 从 `main` 新建 `feat/file-upload`
 2. 在该分支开发 + 测试
 3. 测试通过后合并回 `main`
+4. 发布正式 systemd 服务前运行 `npm run build`
+5. 再执行 `systemctl --user restart pi-web.service`
+
+说明：正式服务使用 `next start` 读取 `.next/` 生产构建。合并源码后只重启服务不会自动包含新功能。
