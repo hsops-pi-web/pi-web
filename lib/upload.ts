@@ -1,10 +1,10 @@
-// 文档上传共享常量与纯函数。前端与服务端 route 共用。
-// 不引入 fs / fetch，保持同构纯净。
+// Shared document-upload constants and pure helpers for frontend and API routes.
+// Keep this module isomorphic: no fs, path, or fetch dependencies.
 
 export const DEFAULT_MAX_FILE_MB = 50;
 export const DEFAULT_MAX_COUNT = 20;
 
-// 接受的文档扩展名（小写，不含点）。图片走原有逻辑，不在此列。
+// Accepted document extensions, lowercase without dots. Images use the existing image flow.
 export const ACCEPTED_DOC_EXTENSIONS = [
   "doc", "docx",
   "xls", "xlsx", "csv",
@@ -14,11 +14,9 @@ export const ACCEPTED_DOC_EXTENSIONS = [
   "md", "markdown",
 ] as const;
 
-// input 元素的 accept 属性：图片 + 文档白名单。
 export const ACCEPT_ATTR =
-  "image/*," + ACCEPTED_DOC_EXTENSIONS.map((e) => `.${e}`).join(",");
+  "image/*," + ACCEPTED_DOC_EXTENSIONS.map((ext) => `.${ext}`).join(",");
 
-// 前端待发送的文档附件：保留 File 引用，不转 base64（省内存）。
 export interface AttachedFile {
   file: File;
   name: string;
