@@ -13,6 +13,10 @@ export function encodeFilePathForApi(filePath: string): string {
     .join("/");
 }
 
+export function getFileDownloadUrl(filePath: string): string {
+  return `/api/files/${encodeFilePathForApi(filePath)}?type=download`;
+}
+
 export function getFileName(filePath: string): string {
   const normalized = normalizeFilePathSlashes(filePath).replace(/\/+$/, "");
   return normalized.split("/").pop() ?? normalized;
