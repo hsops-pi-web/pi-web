@@ -18,9 +18,12 @@ import type {
   ToolCallContent,
   ThinkingContent,
 } from "@/lib/types";
+import { getFileDownloadUrl, getFileName, joinFilePath } from "@/lib/file-paths";
+import { getFileIcon } from "@/components/FileIcons";
 
 interface Props {
   message: AgentMessage;
+  cwd?: string;
   isStreaming?: boolean;
   toolResults?: Map<string, ToolResultMessage>;
   modelNames?: Record<string, string>;
@@ -66,12 +69,12 @@ function copyText(text: string): Promise<void> {
   }
 }
 
-export function MessageView({ message, isStreaming, toolResults, modelNames, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp }: Props) {
+export function MessageView({ message, cwd, isStreaming, toolResults, modelNames, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp }: Props) {
   if (message.role === "user") {
-    return <UserMessageView message={message as UserMessage} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
+    return <UserMessageView message={message as UserMessage} cwd={cwd} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} />;
+    return <AssistantMessageView message={message as AssistantMessage} cwd={cwd} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -80,8 +83,9 @@ export function MessageView({ message, isStreaming, toolResults, modelNames, ent
   return null;
 }
 
-function UserMessageView({ message, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
+function UserMessageView({ message, cwd, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
   message: UserMessage;
+  cwd?: string;
   entryId?: string;
   onFork?: (entryId: string) => void;
   forking?: boolean;
@@ -164,6 +168,7 @@ function UserMessageView({ message, entryId, onFork, forking, onNavigate, prevAs
             </div>
           )}
           {content}
+          <DownloadLinks text={content} cwd={cwd} />
         </div>
 
       </div>
@@ -281,6 +286,7 @@ function UserMessageView({ message, entryId, onFork, forking, onNavigate, prevAs
 
 function AssistantMessageView({
   message,
+  cwd,
   isStreaming,
   toolResults,
   modelNames,
@@ -288,6 +294,7 @@ function AssistantMessageView({
   prevTimestamp,
 }: {
   message: AssistantMessage;
+  cwd?: string;
   isStreaming?: boolean;
   toolResults?: Map<string, ToolResultMessage>;
   modelNames?: Record<string, string>;
@@ -452,7 +459,7 @@ function AssistantMessageView({
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {blocks.map((block, i) => (
-          <BlockView key={i} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(i) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} />
+          <BlockView key={i} block={block} cwd={cwd} toolResults={toolResults} streamingDuration={streamingDurations.get(i) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} />
         ))}
       </div>
 
@@ -505,9 +512,9 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number> }) {
+function BlockView({ block, cwd, toolResults, streamingDuration, toolCallDurations }: { block: AssistantContentBlock; cwd?: string; toolResults?: Map<string, ToolResultMessage>; streamingDuration?: number; toolCallDurations?: Map<string, number> }) {
   if (block.type === "text") {
-    return <TextBlock block={block as TextContent} />;
+    return <TextBlock block={block as TextContent} cwd={cwd} />;
   }
   if (block.type === "thinking") {
     return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} />;
@@ -516,47 +523,104 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
     const tc = block as ToolCallContent;
     const result = toolResults?.get(tc.toolCallId);
     const duration = toolCallDurations?.get(tc.toolCallId);
-    return <ToolCallBlock block={tc} result={result} isRunning={isStreaming && !result} duration={duration} />;
+    return <ToolCallBlock block={tc} result={result} duration={duration} />;
   }
   return null;
 }
 
-function TextBlock({ block }: { block: TextContent }) {
+function TextBlock({ block, cwd }: { block: TextContent; cwd?: string }) {
   return (
-    <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code({ className, children, ...props }) {
-            const lang = className?.replace("language-", "") ?? "";
-            const raw = String(children);
-            const isBlock = className?.includes("language-") || raw.includes("\n");
-            if (isBlock) {
-              return <CodeBlock code={raw.replace(/\n$/, "")} lang={lang} />;
-            }
-            return (
-              <code
-                style={{
-                  background: "var(--bg-selected)",
-                  padding: "1px 4px",
-                  borderRadius: 3,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "0.9em",
-                }}
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          },
-          pre({ children }) {
-            // Unwrap <pre> wrapper — CodeBlock handles its own container
-            return <>{children}</>;
-          },
-        }}
-      >
-        {block.text}
-      </ReactMarkdown>
+    <>
+      <div className="markdown-body">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code({ className, children, ...props }) {
+              const lang = className?.replace("language-", "") ?? "";
+              const raw = String(children);
+              const isBlock = className?.includes("language-") || raw.includes("\n");
+              if (isBlock) {
+                return <CodeBlock code={raw.replace(/\n$/, "")} lang={lang} />;
+              }
+              return (
+                <code
+                  style={{
+                    background: "var(--bg-selected)",
+                    padding: "1px 4px",
+                    borderRadius: 3,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.9em",
+                  }}
+                  {...props}
+                >
+                  {children}
+                </code>
+              );
+            },
+            pre({ children }) {
+              // Unwrap <pre> wrapper — CodeBlock handles its own container
+              return <>{children}</>;
+            },
+          }}
+        >
+          {block.text}
+        </ReactMarkdown>
+      </div>
+      <DownloadLinks text={block.text} cwd={cwd} />
+    </>
+  );
+}
+
+function extractDownloadPaths(text: string): string[] {
+  const matches = new Set<string>();
+  const pattern = /(?:^|[\s([{"'`])([A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s)\]},.;:"'`])/g;
+  for (const match of text.matchAll(pattern)) {
+    const candidate = match[1];
+    if (!candidate) continue;
+    if (candidate.includes("..") || candidate.includes("://") || candidate.startsWith("/") || candidate.startsWith("~")) continue;
+    matches.add(candidate);
+  }
+  return [...matches];
+}
+
+function DownloadLinks({ text, cwd }: { text: string; cwd?: string }) {
+  if (!cwd) return null;
+  const paths = extractDownloadPaths(text);
+  if (!paths.length) return null;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+      {paths.map((relativePath) => {
+        const fullPath = joinFilePath(cwd, relativePath);
+        return (
+          <a
+            key={relativePath}
+            href={getFileDownloadUrl(fullPath)}
+            title={`Download ${relativePath}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              maxWidth: 260,
+              padding: "4px 8px",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--bg-panel)",
+              color: "var(--text-muted)",
+              textDecoration: "none",
+              fontSize: 12,
+              lineHeight: 1.3,
+            }}
+          >
+            {getFileIcon(relativePath, 14)}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{getFileName(relativePath)}</span>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -613,7 +677,7 @@ function ThinkingBlock({ block, duration }: { block: ThinkingContent; duration?:
 }
 
 
-function ToolCallBlock({ block, result, isRunning, duration }: { block: ToolCallContent; result?: ToolResultMessage; isRunning?: boolean; duration?: number }) {
+function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
   const [expanded, setExpanded] = useState(false);
   const inputStr = JSON.stringify(block.input, null, 2);
 
@@ -835,5 +899,3 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
     </div>
   );
 }
-
-
