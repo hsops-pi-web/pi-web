@@ -256,15 +256,19 @@ curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:30141/api/upl
 ```
 预期：`400`。
 
-- [ ] **步骤 8：curl 集成测试 — 大文件路径打通（约 5MB）**
+- [ ] **步骤 8：curl 集成测试 — 大文件路径打通（约 30MB，验证无需 next.config）**
+
+此步是规格中"请求体上限"一节的对应验证：确认 App Router Route Handler 流式接收 multipart、不受 Pages 路由 4MB bodyParser 限制，因此无需改 `next.config.ts`。用 30MB（远超旧 4MB 限制）实测。
 
 ```bash
-head -c 5242880 /dev/urandom > /tmp/big.pdf
+head -c 31457280 /dev/urandom > /tmp/big.pdf   # 30 MB
 curl -sS -X POST http://localhost:30141/api/upload \
   -F "cwd=$TMP" -F "files=@/tmp/big.pdf" | tee /tmp/up3.json
 grep -q '"success":true' /tmp/up3.json && echo "OK: large upload" || echo "FAIL: large upload"
+test -f "$TMP/uploads/big.pdf" && echo "OK: 30MB landed" || echo "FAIL: not written"
 ```
-预期：`OK: large upload`（验证 App Router Route Handler 流式接收 multipart，无需 next.config 改动；Pages 路由的 4MB bodyParser 限制不适用于 Route Handler）。
+预期：`OK: large upload`、`OK: 30MB landed`。
+若此处返回 413/体积错误（实测被限），则规格允许的兜底是针对性加配置——记录现象并上报控制者，不要静默忽略。
 
 - [ ] **步骤 9：停止 dev 服务，清理临时文件**
 

@@ -73,7 +73,7 @@
 - 只取上传文件名的 basename，剥离任何路径分隔符
 - 最终写入路径必须落在 `<cwd>/uploads/` 内，解析后校验前缀
 
-`next.config.ts`: 调高 multipart/请求体大小上限至 ≥ 单文件上限 × 数量上限。
+请求体上限: App Router 的 Route Handler 以 `req.formData()` 流式接收 multipart，默认不带 Pages 路由的 4MB bodyParser 限制（1MB 默认上限只针对 Server Actions，不针对 Route Handler）。自托管 `next start` 下无需改 `next.config.ts`。以大文件集成测试实测验证；若实测确被限制，再针对性加配置。
 
 ### B. 前端 ChatInput 改动（镜像图片逻辑）
 
@@ -185,8 +185,8 @@ steer / followUp 同样携带文档（与图片对称）。
 - 改: `hooks/useAgentSession.ts`（handleSend/handleSteer/handleFollowUp 携带 files + 调上传 + 拼路径）
 - 改: `hooks/useDragDrop.ts`（放行文档）
 - 改: `components/ChatWindow.tsx`（onDrop 分发）
-- 改: `next.config.ts`（请求体上限）
 - 复用: `components/FileIcons.tsx`（getFileIcon）
+- 不改: `next.config.ts`（Route Handler 流式接收，无需调体积上限；以大文件集成测试验证）
 
 ## 分支与合并
 
