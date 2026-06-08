@@ -244,6 +244,23 @@ function streamFile(filePath: string, stat: fs.Stats, contentType: string, range
   });
 }
 
+function contentDispositionAttachment(filePath: string): string {
+  const name = path.basename(filePath).replace(/[\r\n"]/g, "_");
+  return `attachment; filename="${name}"`;
+}
+
+function downloadFile(filePath: string, stat: fs.Stats): Response {
+  return new Response(createFileBodyStream(filePath), {
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": contentDispositionAttachment(filePath),
+      "Cache-Control": "no-cache",
+      "Accept-Ranges": "bytes",
+      "Content-Length": String(stat.size),
+    },
+  });
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -286,6 +303,13 @@ export async function GET(
       const content = fs.readFileSync(filePath, "utf-8");
       const language = getLanguage(filePath);
       return NextResponse.json({ content, language, size: stat.size });
+    }
+
+    if (type === "download") {
+      if (!stat.isFile()) {
+        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+      }
+      return downloadFile(filePath, stat);
     }
 
     if (type === "watch") {
