@@ -1,24 +1,31 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { isAcceptedDoc } from "@/lib/upload";
 
 export function useDragDrop(onDrop: (files: File[]) => void) {
   const [isDragOver, setIsDragOver] = useState(false);
   const counterRef = useRef(0);
 
+  const hasAcceptedFiles = useCallback((items: DataTransferItemList) => {
+    return Array.from(items).some((item) => {
+      if (item.type.startsWith("image/")) return true;
+      const file = item.getAsFile();
+      return file ? isAcceptedDoc(file.name) : item.kind === "file";
+    });
+  }, []);
+
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    const hasImages = Array.from(e.dataTransfer.items).some((item) => item.type.startsWith("image/"));
-    if (!hasImages) return;
+    if (!hasAcceptedFiles(e.dataTransfer.items)) return;
     e.preventDefault();
     counterRef.current += 1;
     setIsDragOver(true);
-  }, []);
+  }, [hasAcceptedFiles]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    const hasImages = Array.from(e.dataTransfer.items).some((item) => item.type.startsWith("image/"));
-    if (!hasImages) return;
+    if (!hasAcceptedFiles(e.dataTransfer.items)) return;
     e.preventDefault();
-  }, []);
+  }, [hasAcceptedFiles]);
 
   const handleDragLeave = useCallback(() => {
     counterRef.current -= 1;

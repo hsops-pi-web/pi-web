@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useReducer } from "react";
 import type { AgentMessage, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
-import { sendAgentCommand } from "@/lib/agent-client";
+import { sendAgentCommand, uploadFiles } from "@/lib/agent-client";
 import type { ToolEntry } from "@/components/ToolPanel";
 
 export interface SessionData {
@@ -74,6 +74,7 @@ export interface ChatInputHandle {
   insertText: (text: string) => void;
   insertIfEmpty: (content: string) => void;
   addImages: (files: File[]) => void;
+  addFiles: (files: File[]) => void;
 }
 
 export interface AttachedImage {
@@ -338,16 +339,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [loadSession, onAgentEnd]);
   handleAgentEventRef.current = handleAgentEvent;
 
-  const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
-    if (!message.trim() && !images?.length) return;
-    if (agentRunning) return;
+  const buildMessageWithFiles = useCallback(async (message: string, cwd: string | undefined, files?: File[]): Promise<string> => {
+    if (!files?.length) return message;
+    if (!cwd) throw new Error("缺少工作目录，无法上传文件");
+    const paths = await uploadFiles(cwd, files);
+    const note = `[附件]\n${paths.map((p) => `- ${p}`).join("\n")}`;
+    return message.trim() ? `${message}\n\n${note}` : note;
+  }, []);
+
+  const handleSend = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
+    if (!message.trim() && !images?.length && !files?.length) return false;
+    if (agentRunning) return false;
+
+    const cwd = isNew ? newSessionCwd : session?.cwd;
+    let finalMessage: string;
+    try {
+      finalMessage = await buildMessageWithFiles(message, cwd ?? undefined, files);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
 
     const imageBlocks = images?.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mimeType, data: img.data } }));
     const userMsg: AgentMessage = {
       role: "user",
       content: imageBlocks?.length
-        ? [...(message.trim() ? [{ type: "text" as const, text: message }] : []), ...imageBlocks]
-        : message,
+        ? [...(finalMessage.trim() ? [{ type: "text" as const, text: finalMessage }] : []), ...imageBlocks]
+        : finalMessage,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -370,7 +388,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           body: JSON.stringify({
             cwd: newSessionCwd,
             type: "prompt",
-            message,
+            message: finalMessage,
             toolNames,
             ...(piImages?.length ? { images: piImages } : {}),
             ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
@@ -390,24 +408,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           created: new Date().toISOString(),
           modified: new Date().toISOString(),
           messageCount: 1,
-          firstMessage: message,
+          firstMessage: finalMessage,
         });
       } else if (session) {
         connectEvents(session.id);
         await sendAgentCommand(session.id, {
           type: "prompt",
-          message,
+          message: finalMessage,
           ...(piImages?.length ? { images: piImages } : {}),
         });
       }
+      return true;
     } catch (e) {
       console.error("Failed to send message:", e);
       setError(e instanceof Error ? e.message : String(e));
       setAgentRunning(false);
       setAgentPhase(null);
       dispatch({ type: "end" });
+      return false;
     }
-  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, connectEvents, onSessionCreated]);
+  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, buildMessageWithFiles, connectEvents, onSessionCreated]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -487,37 +507,57 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isCompacting, loadSession]);
 
-  const handleSteer = useCallback(async (message: string, images?: AttachedImage[]) => {
+  const handleSteer = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
-    setMessages((prev) => [...prev, { role: "user", content: `[steer] ${message}`, timestamp: Date.now() } as AgentMessage]);
+    if (!sid) return false;
+    let finalMessage: string;
+    try {
+      finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    setMessages((prev) => [...prev, { role: "user", content: `[steer] ${finalMessage}`, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
       await sendAgentCommand(sid, {
         type: "steer",
-        message,
+        message: finalMessage,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to steer:", e);
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
-  }, []);
+  }, [buildMessageWithFiles, session?.cwd]);
 
-  const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
+  const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
-    setMessages((prev) => [...prev, { role: "user", content: message, timestamp: Date.now() } as AgentMessage]);
+    if (!sid) return false;
+    let finalMessage: string;
+    try {
+      finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    setMessages((prev) => [...prev, { role: "user", content: finalMessage, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
       await sendAgentCommand(sid, {
         type: "follow_up",
-        message,
+        message: finalMessage,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to follow up:", e);
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
-  }, []);
+  }, [buildMessageWithFiles, session?.cwd]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;

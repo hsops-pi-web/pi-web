@@ -26,3 +26,20 @@ export async function sendAgentCommand<T = unknown>(
   }
   return body.data as T;
 }
+
+export async function uploadFiles(cwd: string, files: File[]): Promise<string[]> {
+  const form = new FormData();
+  form.append("cwd", cwd);
+  for (const file of files) form.append("files", file);
+
+  const res = await fetch("/api/upload", { method: "POST", body: form });
+  const body = (await res.json().catch(() => ({}))) as {
+    success?: boolean;
+    paths?: string[];
+    error?: string;
+  };
+  if (!res.ok || body.error || !body.paths) {
+    throw new Error(body.error ?? `Upload failed: HTTP ${res.status}`);
+  }
+  return body.paths;
+}
