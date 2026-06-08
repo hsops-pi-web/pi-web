@@ -22,6 +22,7 @@ interface FileData {
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac", "weba", "webm"]);
+const BINARY_DOC_EXTS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
 
 function isImagePath(filePath: string): boolean {
   const base = getFileName(filePath);
@@ -33,6 +34,12 @@ function isAudioPath(filePath: string): boolean {
   const base = getFileName(filePath);
   const ext = base.toLowerCase().split(".").pop() ?? "";
   return AUDIO_EXTS.has(ext);
+}
+
+function isBinaryDocPath(filePath: string): boolean {
+  const base = getFileName(filePath);
+  const ext = base.toLowerCase().split(".").pop() ?? "";
+  return BINARY_DOC_EXTS.has(ext);
 }
 
 type DiffLine =
@@ -558,7 +565,56 @@ export function FileViewer({ filePath, cwd }: Props) {
   if (isAudioPath(filePath)) {
     return <AudioViewer filePath={filePath} cwd={cwd} />;
   }
+  if (isBinaryDocPath(filePath)) {
+    return <DownloadOnlyViewer filePath={filePath} cwd={cwd} />;
+  }
   return <TextFileViewer filePath={filePath} cwd={cwd} />;
+}
+
+function DownloadOnlyViewer({ filePath, cwd }: Props) {
+  const name = getFileName(filePath);
+  const ext = name.toLowerCase().split(".").pop() ?? "file";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext}</span>
+        <DownloadButton filePath={filePath} />
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div style={{ maxWidth: 420, textAlign: "center", color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 14, color: "var(--text)", marginBottom: 8 }}>{name}</div>
+          <div style={{ marginBottom: 14 }}>This file type is not previewed in the browser.</div>
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <DownloadButton filePath={filePath} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TextFileViewer({ filePath, cwd }: Props) {

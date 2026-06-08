@@ -246,7 +246,8 @@ function streamFile(filePath: string, stat: fs.Stats, contentType: string, range
 
 function contentDispositionAttachment(filePath: string): string {
   const name = path.basename(filePath).replace(/[\r\n"]/g, "_");
-  return `attachment; filename="${name}"`;
+  const asciiName = name.replace(/[^\x20-\x7E]/g, "_");
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 function downloadFile(filePath: string, stat: fs.Stats): Response {
