@@ -17,9 +17,9 @@
     "package.json"
   ],
   "scripts": {
-    "dev": "next dev -p 30141",
+    "dev": "next dev -p 8000",
     "build": "next build --webpack",
-    "start": "next start -p 30141",
+    "start": "next start -p 8000",
     "lint": "eslint .",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },

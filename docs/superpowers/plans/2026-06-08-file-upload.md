@@ -15,7 +15,7 @@
 **项目约定（来自 AGENTS.md）：**
 - Typecheck：`node_modules/.bin/tsc --noEmit`
 - Lint：`npm run lint`
-- Dev：`npm run dev`（端口 30141）
+- Dev：`npm run dev`（端口 8000）
 - **dev 期间禁止运行 `next build`**，会污染 `.next/`
 
 ---
@@ -212,8 +212,8 @@ export async function POST(req: Request) {
 
 - [ ] **步骤 3：启动 dev 服务（后台）做集成测试**
 
-运行：`npm run dev`（后台运行；端口 30141）
-等待输出 `Ready` / 监听 30141。
+运行：`npm run dev`（后台运行；端口 8000）
+等待输出 `Ready` / 监听 8000。
 
 - [ ] **步骤 4：curl 集成测试 — 正常上传**
 
@@ -221,7 +221,7 @@ export async function POST(req: Request) {
 # 准备临时 cwd 和测试文件
 TMP=$(mktemp -d)
 echo "hello pi" > /tmp/note.md
-curl -sS -X POST http://localhost:30141/api/upload \
+curl -sS -X POST http://localhost:8000/api/upload \
   -F "cwd=$TMP" \
   -F "files=@/tmp/note.md" | tee /tmp/up1.json
 # 断言：返回 {"success":true,"paths":["uploads/note.md"]}
@@ -233,7 +233,7 @@ grep -q '"uploads/note.md"' /tmp/up1.json && echo "OK: path returned" || echo "F
 - [ ] **步骤 5：curl 集成测试 — 重名不覆盖**
 
 ```bash
-curl -sS -X POST http://localhost:30141/api/upload \
+curl -sS -X POST http://localhost:8000/api/upload \
   -F "cwd=$TMP" -F "files=@/tmp/note.md" | tee /tmp/up2.json
 grep -q '"uploads/note(1).md"' /tmp/up2.json && echo "OK: renamed" || echo "FAIL: collision"
 ```
@@ -243,7 +243,7 @@ grep -q '"uploads/note(1).md"' /tmp/up2.json && echo "OK: renamed" || echo "FAIL
 
 ```bash
 echo "x" > /tmp/evil.sh
-curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:30141/api/upload \
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/upload \
   -F "cwd=$TMP" -F "files=@/tmp/evil.sh"
 ```
 预期：`400`。
@@ -251,7 +251,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:30141/api/upl
 - [ ] **步骤 7：curl 集成测试 — cwd 不存在**
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:30141/api/upload \
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/upload \
   -F "cwd=/no/such/dir" -F "files=@/tmp/note.md"
 ```
 预期：`400`。
@@ -262,7 +262,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:30141/api/upl
 
 ```bash
 head -c 31457280 /dev/urandom > /tmp/big.pdf   # 30 MB
-curl -sS -X POST http://localhost:30141/api/upload \
+curl -sS -X POST http://localhost:8000/api/upload \
   -F "cwd=$TMP" -F "files=@/tmp/big.pdf" | tee /tmp/up3.json
 grep -q '"success":true' /tmp/up3.json && echo "OK: large upload" || echo "FAIL: large upload"
 test -f "$TMP/uploads/big.pdf" && echo "OK: 30MB landed" || echo "FAIL: not written"
@@ -797,7 +797,7 @@ git commit -m "feat: allow dragging documents into chat"
 
 - [ ] **步骤 1：启动 dev**
 
-运行：`npm run dev`（端口 30141）。浏览器打开 `http://localhost:30141`。
+运行：`npm run dev`（端口 8000）。浏览器打开 `http://localhost:8000`。
 
 - [ ] **步骤 2：附件 → chip 验证**
 

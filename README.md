@@ -17,7 +17,7 @@ npm install -g @agegr/pi-web
 pi-web
 ```
 
-启动后打开 [http://localhost:30141](http://localhost:30141)。
+启动后打开 [http://localhost:8000](http://localhost:8000)。
 
 **可选参数：**
 
@@ -137,7 +137,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/pi-web --hostname 0.0.0.0 --port 30141
+ExecStart=/usr/local/bin/pi-web --hostname 0.0.0.0 --port 8000
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
@@ -197,7 +197,7 @@ systemctl --user restart pi-web
 
 ```bash
 npm install
-npm run dev   # 端口 30141
+npm run dev   # 端口 8000
 ```
 
 ## 项目结构

@@ -36,7 +36,7 @@ const { values: cliArgs } = parseArgs({
   strict: false,
 });
 
-const port     = cliArgs.port     ?? process.env.PORT     ?? "30141";
+const port     = cliArgs.port     ?? process.env.PORT     ?? "8000";
 const hostname = cliArgs.hostname ?? process.env.HOSTNAME ?? null;
 
 if (!fs.existsSync(nextDir)) {
