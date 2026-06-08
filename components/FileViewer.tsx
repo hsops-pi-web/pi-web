@@ -7,7 +7,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "@/hooks/useTheme";
-import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import { encodeFilePathForApi, getFileDownloadUrl, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 
 interface Props {
   filePath: string;
@@ -22,6 +22,7 @@ interface FileData {
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac", "weba", "webm"]);
+const BINARY_DOC_EXTS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
 
 function isImagePath(filePath: string): boolean {
   const base = getFileName(filePath);
@@ -35,6 +36,12 @@ function isAudioPath(filePath: string): boolean {
   return AUDIO_EXTS.has(ext);
 }
 
+function isBinaryDocPath(filePath: string): boolean {
+  const base = getFileName(filePath);
+  const ext = base.toLowerCase().split(".").pop() ?? "";
+  return BINARY_DOC_EXTS.has(ext);
+}
+
 type DiffLine =
   | { type: "unchanged"; text: string; lineNo: number }
   | { type: "removed"; text: string; lineNo: number }
@@ -44,6 +51,34 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function DownloadButton({ filePath }: { filePath: string }) {
+  return (
+    <a
+      href={getFileDownloadUrl(filePath)}
+      title="Download file"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 8px",
+        border: "1px solid var(--border)",
+        borderRadius: 5,
+        color: "var(--text-muted)",
+        textDecoration: "none",
+        fontSize: 11,
+        lineHeight: 1.4,
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+      Download
+    </a>
+  );
 }
 
 // Myers diff — returns line-level unified diff
@@ -339,6 +374,7 @@ function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
         <span style={{ marginLeft: "auto" }}>{ext || "image"}</span>
         {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
         {formatSizeStr && <span>{formatSizeStr}</span>}
+        <DownloadButton filePath={filePath} />
         <span
           title={watching ? "Live sync active" : "Not watching"}
           style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
@@ -473,6 +509,7 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
         <span style={{ marginLeft: "auto" }}>{ext || "audio"}</span>
         {duration != null && <span>{formatDuration(duration)}</span>}
         {size != null && <span>{formatSize(size)}</span>}
+        <DownloadButton filePath={filePath} />
         <span
           title={watching ? "Live sync active" : "Not watching"}
           style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
@@ -528,7 +565,56 @@ export function FileViewer({ filePath, cwd }: Props) {
   if (isAudioPath(filePath)) {
     return <AudioViewer filePath={filePath} cwd={cwd} />;
   }
+  if (isBinaryDocPath(filePath)) {
+    return <DownloadOnlyViewer filePath={filePath} cwd={cwd} />;
+  }
   return <TextFileViewer filePath={filePath} cwd={cwd} />;
+}
+
+function DownloadOnlyViewer({ filePath, cwd }: Props) {
+  const name = getFileName(filePath);
+  const ext = name.toLowerCase().split(".").pop() ?? "file";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext}</span>
+        <DownloadButton filePath={filePath} />
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div style={{ maxWidth: 420, textAlign: "center", color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 14, color: "var(--text)", marginBottom: 8 }}>{name}</div>
+          <div style={{ marginBottom: 14 }}>This file type is not previewed in the browser.</div>
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <DownloadButton filePath={filePath} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TextFileViewer({ filePath, cwd }: Props) {
@@ -663,6 +749,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
         <span style={{ marginLeft: "auto" }}>{data.language}</span>
         {viewMode === "source" && <span>{lines.length} lines</span>}
         <span>{formatSize(data.size)}</span>
+        <DownloadButton filePath={filePath} />
 
         {/* Live watch indicator */}
         <span

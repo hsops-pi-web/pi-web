@@ -156,6 +156,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
   const messageRefs = useMessageRefs(visibleMessages.length);
+  const activeCwd = session?.cwd ?? newSessionCwd ?? undefined;
 
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
 
@@ -327,6 +328,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                   <MessageView
                     key={idx}
                     message={msg}
+                    cwd={activeCwd}
                     toolResults={toolResultsMap}
                     modelNames={modelNames}
                     entryId={entryIds[idx]}
@@ -352,7 +354,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             })()}
 
             {streamState.isStreaming && streamState.streamingMessage && (
-              <MessageView message={streamState.streamingMessage as AgentMessage} isStreaming modelNames={modelNames} />
+              <MessageView message={streamState.streamingMessage as AgentMessage} cwd={activeCwd} isStreaming modelNames={modelNames} />
             )}
 
             {agentRunning && !streamState.streamingMessage && (
