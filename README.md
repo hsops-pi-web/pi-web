@@ -1,33 +1,31 @@
 # pi-web
 
-[pi 编程智能体](https://github.com/badlogic/pi-mono) 的网页界面。在浏览器中浏览会话、与智能体对话、分叉对话、切换消息分支。
+基于 [pi 编程智能体](https://github.com/badlogic/pi-mono) 二次开发的网页界面。当前版本需要从本仓库源码本地构建，生产服务通过 `.next/` 下的构建产物启动。
 
-## 快速开始
+网页端支持浏览历史会话、与智能体实时对话、管理会话分支、切换模型和工具，并新增了图片输入、文档上传、文件预览和下载等能力。
 
-**无需安装，直接运行：**
+## 本地源码启动
 
-```bash
-npx @agegr/pi-web@latest
-```
-
-**或全局安装后使用：**
+安装依赖：
 
 ```bash
-npm install -g @agegr/pi-web
-pi-web
+npm install
 ```
 
-启动后打开 [http://localhost:8000](http://localhost:8000)。
-
-**可选参数：**
+开发模式：
 
 ```bash
-pi-web --port 8080               # 自定义端口
-pi-web --hostname 127.0.0.1      # 仅本机访问
-pi-web -p 8080 -H 127.0.0.1     # 组合使用
-
-PORT=8080 pi-web                 # 也支持环境变量
+npm run dev   # http://localhost:8000
 ```
+
+生产模式需要先生成 `.next/` 构建产物：
+
+```bash
+npm run build
+npm run start # http://localhost:8000
+```
+
+`npm run start` 使用 `next start -p 8000`，读取 `.next/` 目录中的生产构建。代码更新后必须重新执行 `npm run build`，否则服务仍会运行旧的页面和 API。
 
 ## 配置本地 AI 模型
 
@@ -111,14 +109,14 @@ nano ~/.pi/agent/models.json
 
 ## 使用 systemctl 管理服务
 
-推荐使用用户级 systemd 服务运行 `pi-web`，这样服务会以当前用户身份读取 `~/.pi/agent` 下的会话和模型配置。
+推荐使用用户级 systemd 服务运行本仓库的生产构建。服务会以当前用户身份读取 `~/.pi/agent` 下的会话、模型和 skill 配置。
 
-先全局安装并确认 `pi-web` 的绝对路径：
+先在仓库目录生成生产构建：
 
 ```bash
-npm install -g @agegr/pi-web
-command -v pi-web
-command -v node
+cd /home/hsops/pi-web
+npm install
+npm run build
 ```
 
 创建用户级服务文件：
@@ -128,7 +126,7 @@ mkdir -p ~/.config/systemd/user
 nano ~/.config/systemd/user/pi-web.service
 ```
 
-写入以下内容，并把 `ExecStart` 改成 `command -v pi-web` 输出的绝对路径：
+写入以下内容；如果仓库路径不同，请同步修改 `WorkingDirectory`：
 
 ```ini
 [Unit]
@@ -137,7 +135,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/pi-web --hostname 0.0.0.0 --port 8000
+WorkingDirectory=/home/hsops/pi-web
+ExecStart=/usr/bin/env npm run start
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
@@ -171,49 +170,51 @@ sudo loginctl enable-linger "$USER"
 更新服务版本：
 
 ```bash
-npm install -g @agegr/pi-web@latest
-systemctl --user restart pi-web
-```
-
-本仓库本地开发合并到 `main` 后发布到 systemd 服务时，需要先重新生成生产构建产物，再重启服务：
-
-```bash
+cd /home/hsops/pi-web
 git checkout main
+git pull
+npm install
 npm run build
 systemctl --user restart pi-web
 ```
 
-`pi-web.service` 使用 `next start` 读取 `.next/` 下的生产构建。仅合并代码并重启服务不会重新编译页面和 API，仍可能继续运行旧构建。
+`pi-web.service` 使用 `next start` 读取 `.next/` 下的生产构建。仅拉取代码并重启服务不会重新编译页面和 API，仍可能继续运行旧构建。
 
-## 功能介绍
+## 已实现功能
 
-- **会话浏览器** — 按工作目录分组展示所有 pi 会话
-- **实时对话** — 通过 SSE 流式输出与智能体实时交互
-- **图片上传** — 输入栏支持选择、拖拽或粘贴图片，随消息作为多模态图片输入发送给智能体
-- **文本 / 文档上传** — 支持上传 `txt`、`md`、`pdf`、`docx`、`xlsx`、`csv`、`pptx` 等文件，文件会保存到当前工作目录的 `uploads/` 下，并自动把附件路径追加到消息中
-- **文件预览与下载** — 文件浏览器支持预览文本、Markdown、代码、图片和音频；不适合浏览器预览的文件会提供下载入口
-- **消息内下载链接** — 智能体回复中出现相对文件路径时，会自动生成下载按钮，便于下载生成的文本、图片或其他文件
-- **会话分叉** — 从任意用户消息创建独立的新会话分支
-- **会话内分支** — 回退到任意节点继续对话，在同一文件内创建分支
-- **分支导航器** — 可视化切换同一会话内的各个分支
-- **模型切换** — 对话中途随时切换模型
-- **工具面板** — 控制智能体可使用的工具
-- **压缩会话** — 对长会话进行摘要，节省上下文窗口
-- **引导 / 追加** — 打断正在运行的智能体，或在其完成后追加消息
+- **会话浏览器** — 按工作目录分组展示 `~/.pi/agent/sessions` 下的 pi 会话，支持历史会话读取和孤儿会话提示
+- **实时对话** — 通过 SSE 流式输出与智能体实时交互，刷新页面后可自动重连仍在运行的会话
+- **会话分叉** — 从任意用户消息创建独立的新会话分支，并在侧边栏中展示父子关系
+- **会话内分支** — 支持回退到同一会话内的任意节点继续对话，保留同一 `.jsonl` 文件内的分支结构
+- **分支导航器** — 可视化切换同一会话内的不同消息分支
+- **模型管理与切换** — 支持网页编辑 `models.json`、配置 OpenAI-compatible provider、设置默认模型，并在对话中途切换模型
+- **OAuth / API Key 管理** — Models 面板可管理受支持 provider 的登录状态和 API Key
+- **思考强度控制** — 根据模型能力展示 thinking 选项，支持在输入栏切换
+- **工具预设面板** — 支持关闭工具、默认工具和完整工具预设，新会话创建时会按当前预设传入 tool names
+- **Skills 管理** — 支持查看、搜索、安装和启停 pi skills，包含用户级和项目级 skill
+- **压缩会话** — 支持手动压缩长会话，并兼容新旧 compaction SSE 事件
+- **引导 / 追加** — 智能体运行中可发送 steer 指令，完成后可继续追加 follow-up 消息
+- **上下文与用量展示** — 顶部栏显示上下文窗口占用、输入 / 输出 token、缓存命中和成本信息
+- **完成提示音** — 可在输入栏切换智能体完成后的声音提醒
+- **文件浏览器** — 侧边栏内置当前工作目录文件树，可在标签页中打开文件
+- **文本 / Markdown / 代码预览** — 支持文本、Markdown 和代码文件预览，文件变化后可自动刷新
+- **图片预览与下载** — 支持常见图片文件预览，图片文件可直接下载
+- **音频预览与下载** — 支持常见音频文件播放和下载
+- **二进制文件下载** — 不适合浏览器预览的文件会展示下载入口
+- **图片上传输入** — 输入栏支持选择、拖拽或粘贴图片，图片随消息作为多模态输入发送给智能体
+- **文本 / 文档上传** — 支持上传 `txt`、`md`、`markdown`、`pdf`、`doc`、`docx`、`xls`、`xlsx`、`csv`、`ppt`、`pptx` 文件，保存到当前工作目录 `uploads/` 下，并把附件路径自动追加到消息中
+- **消息内下载按钮** — 智能体回复中出现相对文件路径时，会自动生成下载按钮，便于下载生成的文本、图片或其他文件
+- **标签页文件查看** — 聊天页和文件页共用顶部标签栏，可在多个文件和会话之间切换
 
 ## 注意事项
 
 - **数据目录** — 默认读取 `~/.pi/agent/sessions` 下的会话文件。可通过环境变量 `PI_CODING_AGENT_DIR` 指定其他目录。
-- **模型配置** — 从智能体数据目录下的 `models.json` 读取可用模型，可在侧边栏的「Models」面板中编辑。
-- **文件浏览** — 侧边栏内置文件浏览器，可在标签页中查看当前工作目录下的文件。
+- **模型配置** — 从智能体数据目录下的 `models.json` 读取可用模型，可在侧边栏的 **Models** 面板中编辑。
+- **Skill 路径** — pi 的 skill 默认存放在 `~/.pi/agent/skills/`，项目级 skill 存放在当前工作目录的 `.pi/agent/skills/`。
+- **文件访问范围** — 文件浏览和下载只允许访问已知会话工作目录、当前打开的新会话目录以及常见用户目录，避免任意路径读取。
 - **上传限制** — 文档上传默认单文件最大 50MB、一次最多 20 个文件，可通过 `PI_WEB_UPLOAD_MAX_MB` 和 `PI_WEB_UPLOAD_MAX_COUNT` 调整。图片走多模态输入通道，不写入 `uploads/`。
-
-## 开发
-
-```bash
-npm install
-npm run dev   # 端口 8000
-```
+- **生产更新** — 二次开发后必须重新执行 `npm run build` 生成 `.next/`，再重启 systemd 服务。
+- **开发限制** — 开发时使用 `npm run dev`，不要用 `next build` 替代开发服务器；生产发布前再执行 `npm run build`。
 
 ## 项目结构
 
@@ -224,15 +225,21 @@ app/
     agent/         # 发送命令、SSE 事件流
     upload/        # 文档附件上传
     files/         # 文件列表、预览、监听与下载
+    auth/          # OAuth 与 API Key 管理
+    skills/        # skill 查询、搜索、安装和启停
     models/        # 可用模型列表与默认模型
     models-config/ # 读写 models.json
 components/        # UI 组件
+hooks/             # 会话、主题、拖拽和声音等前端状态
 lib/
   session-reader.ts  # 解析 .jsonl 会话文件
   rpc-manager.ts     # 管理 AgentSession 生命周期
   normalize.ts       # 规范化 toolCall 字段名
+  upload.ts          # 上传文件类型和限制配置
+  file-paths.ts      # 文件 API 路径编码和下载 URL
   types.ts
 ```
 
 会话文件存储路径：`~/.pi/agent/sessions/<编码后的工作目录>/<时间戳>_<uuid>.jsonl`
-pi的skill存放路径: `~/.pi/agent/skills/`
+
+pi 的 skill 存放路径：`~/.pi/agent/skills/`
