@@ -43,3 +43,5 @@ next-env.d.ts
 
 # local Pi web settings; project extensions under .pi/extensions are versioned
 /.pi/settings.json
+/.claude/
+/CLAUDE.md
