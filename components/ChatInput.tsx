@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import { getFileIcon } from "@/components/FileIcons";
+import { FUNASR_AUDIO_ACCEPT_ATTR, isAcceptedFunasrAudio, transcribeFunasrAudio } from "@/lib/funasr";
 import { ACCEPT_ATTR, DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, formatBytes, isAcceptedDoc, type AttachedFile } from "@/lib/upload";
 
 export interface AttachedImage {
@@ -62,6 +63,81 @@ const THINKING_LEVEL_DESC: Record<typeof THINKING_LEVELS[number], string> = {
   xhigh: "最高强度推理",
 };
 
+type AudioWindow = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+
+interface ActiveRecording {
+  stream: MediaStream;
+  context: AudioContext;
+  source: MediaStreamAudioSourceNode;
+  processor: ScriptProcessorNode;
+  chunks: Float32Array[];
+  sampleRate: number;
+  timer: ReturnType<typeof setInterval>;
+}
+
+function mergeAudioChunks(chunks: Float32Array[]): Float32Array {
+  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Float32Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
+function writeAscii(view: DataView, offset: number, value: string) {
+  for (let i = 0; i < value.length; i++) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const bytesPerSample = 2;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 8 * bytesPerSample, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    offset += bytesPerSample;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function formatRecordingTime(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function cleanupRecording(recording: ActiveRecording) {
+  clearInterval(recording.timer);
+  recording.processor.onaudioprocess = null;
+  recording.processor.disconnect();
+  recording.source.disconnect();
+  recording.stream.getTracks().forEach((track) => track.stop());
+  void recording.context.close().catch(() => undefined);
+}
+
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, modelNames, modelList, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, toolPreset, onToolPresetChange,
@@ -77,6 +153,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingMs, setRecordingMs] = useState(0);
   const canSend = value.trim().length > 0 || attachedImages.length > 0 || attachedFiles.length > 0;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -85,6 +165,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const toolDropdownRef = useRef<HTMLDivElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const recordingRef = useRef<ActiveRecording | null>(null);
 
   const processImageFiles = useCallback(async (files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith("image/"));
@@ -132,6 +214,135 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const next = accepted.slice(0, Math.max(0, room)).map((file) => ({ file, name: file.name, size: file.size }));
       return [...prev, ...next];
     });
+  }, []);
+
+  const fitTextarea = useCallback(() => {
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, []);
+
+  const insertTranscription = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setValue((prev) => {
+      if (!prev.trim()) return trimmed;
+      const separator = /[\s\n]$/.test(prev) ? "" : "\n";
+      return `${prev}${separator}${trimmed}`;
+    });
+    fitTextarea();
+  }, [fitTextarea]);
+
+  const transcribeAudioFile = useCallback(async (file: File) => {
+    if (isTranscribing) return;
+    setTranscriptionError(null);
+    if (!isAcceptedFunasrAudio(file.name, file.type)) {
+      setTranscriptionError(`不支持的音频类型：${file.name || file.type || "unknown"}`);
+      return;
+    }
+
+    setIsTranscribing(true);
+    try {
+      const result = await transcribeFunasrAudio(file);
+      if (!result.text.trim()) {
+        setTranscriptionError("FunASR 未识别到语音内容");
+        return;
+      }
+      insertTranscription(result.text);
+    } catch (error) {
+      setTranscriptionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [insertTranscription, isTranscribing]);
+
+  const stopRecording = useCallback(async (shouldTranscribe: boolean) => {
+    const recording = recordingRef.current;
+    if (!recording) return;
+
+    recordingRef.current = null;
+    cleanupRecording(recording);
+    setIsRecording(false);
+    setRecordingMs(0);
+
+    if (!shouldTranscribe) return;
+
+    const samples = mergeAudioChunks(recording.chunks);
+    if (samples.length < recording.sampleRate / 4) {
+      setTranscriptionError("录音太短，未提交转写");
+      return;
+    }
+
+    const blob = encodeWav(samples, recording.sampleRate);
+    const file = new File([blob], `funasr-recording-${Date.now()}.wav`, { type: "audio/wav" });
+    await transcribeAudioFile(file);
+  }, [transcribeAudioFile]);
+
+  const startRecording = useCallback(async () => {
+    if (isRecording || isTranscribing) return;
+    setTranscriptionError(null);
+
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      setTranscriptionError("浏览器要求 HTTPS 或 localhost 才能录音；可先选择音频文件转写");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setTranscriptionError("当前浏览器不支持麦克风录音；可先选择音频文件转写");
+      return;
+    }
+
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      const AudioContextCtor = window.AudioContext ?? (window as AudioWindow).webkitAudioContext;
+      if (!AudioContextCtor) {
+        throw new Error("当前浏览器不支持 Web Audio 录音");
+      }
+
+      const context = new AudioContextCtor();
+      if (context.state === "suspended") await context.resume();
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const chunks: Float32Array[] = [];
+
+      processor.onaudioprocess = (event) => {
+        chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(context.destination);
+
+      const startedAt = Date.now();
+      const timer = setInterval(() => setRecordingMs(Date.now() - startedAt), 200);
+      recordingRef.current = {
+        stream,
+        context,
+        source,
+        processor,
+        chunks,
+        sampleRate: context.sampleRate,
+        timer,
+      };
+      setRecordingMs(0);
+      setIsRecording(true);
+    } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      setTranscriptionError(error instanceof Error ? error.message : String(error));
+    }
+  }, [isRecording, isTranscribing]);
+
+  useEffect(() => {
+    return () => {
+      const recording = recordingRef.current;
+      if (!recording) return;
+      recordingRef.current = null;
+      cleanupRecording(recording);
+    };
   }, []);
 
   useImperativeHandle(ref, () => ({
@@ -344,6 +555,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           e.target.value = "";
         }}
       />
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept={FUNASR_AUDIO_ACCEPT_ATTR}
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void transcribeAudioFile(file);
+          e.target.value = "";
+        }}
+      />
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
         {/* Retry banner */}
         {retryInfo && (
@@ -435,6 +657,49 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         {fileError && (
           <div style={{ marginBottom: 6, fontSize: 12, color: "rgba(220,38,38,0.9)" }}>
             {fileError}
+          </div>
+        )}
+        {(transcriptionError || isTranscribing || isRecording) && (
+          <div
+            style={{
+              marginBottom: 6,
+              fontSize: 12,
+              color: transcriptionError ? "rgba(220,38,38,0.9)" : "var(--text-muted)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            {isTranscribing && (
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  border: "2px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+                  borderTopColor: "var(--accent)",
+                  animation: "spin 0.8s linear infinite",
+                }}
+              />
+            )}
+            {isRecording && !isTranscribing && (
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "#ef4444",
+                  animation: "pulse 1.2s ease-in-out infinite",
+                }}
+              />
+            )}
+            <span>
+              {transcriptionError
+                ? transcriptionError
+                : isTranscribing
+                  ? "FunASR 转写中..."
+                  : `录音 ${formatRecordingTime(recordingMs)}`}
+            </span>
           </div>
         )}
 
@@ -598,6 +863,107 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <polyline points="21 15 16 10 5 21" />
               </svg>
+            </button>
+            <button
+              onClick={() => {
+                if (isRecording) void stopRecording(true);
+                else void startRecording();
+              }}
+              disabled={isTranscribing}
+              title={isRecording ? "停止录音并转写" : "录音并转写为文字"}
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 5,
+                width: isRecording ? 58 : 32,
+                height: 32,
+                padding: 0,
+                background: isRecording ? "rgba(239,68,68,0.10)" : "none",
+                border: "none",
+                borderRadius: 9,
+                color: isRecording ? "#ef4444" : "var(--text-muted)",
+                cursor: isTranscribing ? "not-allowed" : "pointer",
+                opacity: isTranscribing ? 0.5 : 1,
+                transition: "background 0.12s, color 0.12s, width 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                if (isTranscribing) return;
+                e.currentTarget.style.background = isRecording ? "rgba(239,68,68,0.16)" : "var(--bg-hover)";
+                e.currentTarget.style.color = isRecording ? "#ef4444" : "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = isRecording ? "rgba(239,68,68,0.10)" : "none";
+                e.currentTarget.style.color = isRecording ? "#ef4444" : "var(--text-muted)";
+              }}
+            >
+              {isRecording ? (
+                <>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <rect x="2" y="2" width="6" height="6" rx="1.2" fill="currentColor" />
+                  </svg>
+                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                    {formatRecordingTime(recordingMs)}
+                  </span>
+                </>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                  <line x1="12" y1="18" x2="12" y2="22" />
+                  <line x1="8" y1="22" x2="16" y2="22" />
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={() => audioInputRef.current?.click()}
+              disabled={isTranscribing || isRecording}
+              title="选择音频文件转写"
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 32,
+                height: 32,
+                padding: 0,
+                background: "none",
+                border: "none",
+                borderRadius: 9,
+                color: isTranscribing ? "var(--accent)" : "var(--text-muted)",
+                cursor: (isTranscribing || isRecording) ? "not-allowed" : "pointer",
+                opacity: (isTranscribing || isRecording) ? 0.5 : 1,
+                transition: "background 0.12s, color 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                if (isTranscribing || isRecording) return;
+                e.currentTarget.style.background = "var(--bg-hover)";
+                e.currentTarget.style.color = "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "none";
+                e.currentTarget.style.color = isTranscribing ? "var(--accent)" : "var(--text-muted)";
+              }}
+            >
+              {isTranscribing ? (
+                <span
+                  style={{
+                    width: 13,
+                    height: 13,
+                    borderRadius: "50%",
+                    border: "2px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+                    borderTopColor: "var(--accent)",
+                    animation: "spin 0.8s linear infinite",
+                  }}
+                />
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 18V5l12-2v13" />
+                  <circle cx="6" cy="18" r="3" />
+                  <circle cx="18" cy="16" r="3" />
+                </svg>
+              )}
             </button>
             {/* Model selector — visible always, disabled during streaming */}
             {modelOptions.length > 0 && currentName && onModelChange && (
