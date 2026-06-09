@@ -347,6 +347,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return message.trim() ? `${message}\n\n${note}` : note;
   }, []);
 
+  const isSlashCommand = useCallback((message: string): boolean => message.trimStart().startsWith("/"), []);
+
   const handleSend = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     if (!message.trim() && !images?.length && !files?.length) return false;
     if (agentRunning) return false;
@@ -517,9 +519,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-    setMessages((prev) => [...prev, { role: "user", content: `[steer] ${finalMessage}`, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
+      if (isSlashCommand(finalMessage)) {
+        setMessages((prev) => [...prev, { role: "user", content: finalMessage, timestamp: Date.now() } as AgentMessage]);
+        await sendAgentCommand(sid, {
+          type: "prompt_command",
+          message: finalMessage,
+          ...(piImages?.length ? { images: piImages } : {}),
+          streamingBehavior: "steer",
+        });
+        return true;
+      }
+      setMessages((prev) => [...prev, { role: "user", content: `[steer] ${finalMessage}`, timestamp: Date.now() } as AgentMessage]);
       await sendAgentCommand(sid, {
         type: "steer",
         message: finalMessage,
@@ -531,7 +543,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-  }, [buildMessageWithFiles, session?.cwd]);
+  }, [buildMessageWithFiles, isSlashCommand, session?.cwd]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
@@ -546,6 +558,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setMessages((prev) => [...prev, { role: "user", content: finalMessage, timestamp: Date.now() } as AgentMessage]);
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
+      if (isSlashCommand(finalMessage)) {
+        await sendAgentCommand(sid, {
+          type: "prompt_command",
+          message: finalMessage,
+          ...(piImages?.length ? { images: piImages } : {}),
+          streamingBehavior: "followUp",
+        });
+        return true;
+      }
       await sendAgentCommand(sid, {
         type: "follow_up",
         message: finalMessage,
@@ -557,7 +578,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-  }, [buildMessageWithFiles, session?.cwd]);
+  }, [buildMessageWithFiles, isSlashCommand, session?.cwd]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;

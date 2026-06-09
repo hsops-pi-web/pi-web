@@ -153,6 +153,15 @@ export class AgentSessionWrapper {
         return null;
       }
 
+      case "prompt_command": {
+        const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        await this.inner.prompt(command.message as string, {
+          ...(promptImages?.length ? { images: promptImages } : {}),
+          streamingBehavior: command.streamingBehavior as "steer" | "followUp" | undefined,
+        });
+        return null;
+      }
+
       case "abort":
         await this.inner.abort();
         return null;
