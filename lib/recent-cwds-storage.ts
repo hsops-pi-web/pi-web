@@ -85,3 +85,25 @@ export function add(path: string): RecentCwd[] {
 
   return limited;
 }
+
+/**
+ * 删除指定目录
+ * @param path 要删除的目录路径
+ * @returns 更新后的目录列表
+ */
+export function remove(path: string): RecentCwd[] {
+  const current = getAll();
+  const filtered = current.filter((item) => item.path !== path);
+
+  try {
+    if (filtered.length === 0) {
+      localStorage.removeItem(STORAGE_KEY);
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    }
+  } catch (e) {
+    console.warn("[recent-cwds] Failed to update localStorage:", e);
+  }
+
+  return filtered;
+}
