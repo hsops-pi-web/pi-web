@@ -107,3 +107,39 @@ export function remove(path: string): RecentCwd[] {
 
   return filtered;
 }
+
+/**
+ * 清空所有最近目录记录
+ */
+export function clear(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (e) {
+    console.warn("[recent-cwds] Failed to clear localStorage:", e);
+  }
+}
+
+/**
+ * 验证目录是否存在且有效
+ * @param path 要验证的目录路径
+ * @returns true=有效, false=无效, undefined=验证失败(网络错误等)
+ */
+export async function validate(path: string): Promise<boolean | undefined> {
+  try {
+    const response = await fetch("/api/default-cwd", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: path }),
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const data = await response.json();
+    return typeof data.cwd === "string";
+  } catch (e) {
+    console.warn("[recent-cwds] Failed to validate directory:", path, e);
+    return undefined;
+  }
+}
