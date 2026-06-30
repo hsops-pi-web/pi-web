@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer } from "./FileExplorer";
+import { useRecentCwds } from "@/hooks/useRecentCwds";
 
 interface Props {
   selectedSessionId: string | null;
@@ -33,21 +34,6 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-/** Return the 5 most recently active cwds across all sessions */
-function getRecentCwds(sessions: SessionInfo[]): string[] {
-  const latestByCwd = new Map<string, string>(); // cwd -> most recent modified
-  for (const s of sessions) {
-    if (!s.cwd) continue;
-    const prev = latestByCwd.get(s.cwd);
-    if (!prev || s.modified > prev) {
-      latestByCwd.set(s.cwd, s.modified);
-    }
-  }
-  return [...latestByCwd.entries()]
-    .sort((a, b) => b[1].localeCompare(a[1]))
-    .slice(0, 5)
-    .map(([cwd]) => cwd);
-}
 
 function shortenCwd(cwd: string, homeDir?: string): string {
   const path = (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
@@ -201,6 +187,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
+  const { cwds: recentCwds, addCwd, removeCwd, clearCwds } = useRecentCwds();
   const [homeDir, setHomeDir] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [customPathOpen, setCustomPathOpen] = useState(false);
@@ -268,26 +255,27 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         const target = allSessions.find((s) => s.id === initialSessionId);
         if (target) {
           setSelectedCwd(target.cwd);
+          addCwd(target.cwd);
           onSelectSession(target, true);
           return;
         }
         // Session not found — notify parent so it can show the placeholder
         onInitialRestoreDone?.();
       }
-      const cwds = getRecentCwds(allSessions);
-      if (cwds.length > 0) setSelectedCwd(cwds[0]);
+      if (recentCwds.length > 0) setSelectedCwd(recentCwds[0].path);
     }
-  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
+  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone, recentCwds, addCwd]);
 
   const commitCustomPath = useCallback(() => {
     const path = customPathValue.trim();
     if (path) {
       setSelectedCwd(path);
+      addCwd(path);
     }
     setCustomPathOpen(false);
     setCustomPathValue("");
     setDropdownOpen(false);
-  }, [customPathValue]);
+  }, [customPathValue, addCwd]);
 
   const handleDefaultCwd = useCallback(async () => {
     try {
@@ -295,12 +283,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       const data = await res.json() as { cwd?: string; error?: string };
       if (data.cwd) {
         setSelectedCwd(data.cwd);
+        addCwd(data.cwd);
         setDropdownOpen(false);
       }
     } catch {
       // ignore
     }
-  }, []);
+  }, [addCwd]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -325,7 +314,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentCwds = getRecentCwds(allSessions);
   const filteredSessions = selectedCwd
     ? allSessions.filter((s) => s.cwd === selectedCwd)
     : allSessions;
@@ -477,42 +465,77 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               }}
             >
               {recentCwds.map((cwd) => (
-                <button
-                  key={cwd}
-                  onClick={() => {
-                    setSelectedCwd(cwd);
-                    setCustomPathOpen(false);
-                    setCustomPathValue("");
-                    setDropdownOpen(false);
-                  }}
+                <div
+                  key={cwd.path}
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 7,
                     width: "100%",
                     padding: "8px 10px",
-                    background: cwd === selectedCwd ? "var(--bg-selected)" : "none",
-                    border: "none",
+                    background: cwd.path === selectedCwd ? "var(--bg-selected)" : "none",
                     borderBottom: "1px solid var(--border)",
-                    color: cwd === selectedCwd ? "var(--text)" : "var(--text-muted)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 11,
-                    fontFamily: "var(--font-mono)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
                   }}
-                  title={cwd}
                 >
-                  {cwd === selectedCwd && (
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                      <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                  <button
+                    onClick={() => {
+                      setSelectedCwd(cwd.path);
+                      setCustomPathOpen(false);
+                      setCustomPathValue("");
+                      setDropdownOpen(false);
+                    }}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      padding: 0,
+                      background: "none",
+                      border: "none",
+                      color: cwd.path === selectedCwd ? "var(--text)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={cwd.path}
+                  >
+                    {cwd.path === selectedCwd && (
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                      </svg>
+                    )}
+                    {cwd.path !== selectedCwd && <span style={{ width: 10, flexShrink: 0 }} />}
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortenCwd(cwd.path, homeDir)}</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeCwd(cwd.path);
+                      if (cwd.path === selectedCwd) {
+                        setSelectedCwd(recentCwds.length > 1 ? recentCwds[0].path : null);
+                      }
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 20, height: 20, padding: 0, flexShrink: 0,
+                      background: "none", border: "none",
+                      color: "var(--text-dim)", cursor: "pointer",
+                      opacity: 0.6,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "#ef4444"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; e.currentTarget.style.color = "var(--text-dim)"; }}
+                    title="Remove from history"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
-                  )}
-                  {cwd !== selectedCwd && <span style={{ width: 10, flexShrink: 0 }} />}
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortenCwd(cwd, homeDir)}</span>
-                </button>
+                  </button>
+                </div>
               ))}
 
               {/* Default cwd shortcut */}
@@ -538,6 +561,37 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     <path d="M1 3A1 1 0 0 1 2 2H4L5 3.5H8.5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8V3Z" />
                   </svg>
                   <span>Use default directory</span>
+                </button>
+              )}
+
+              {/* Clear history button */}
+              {recentCwds.length > 0 && !customPathOpen && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearCwds();
+                    setSelectedCwd(null);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    width: "100%",
+                    padding: "8px 10px",
+                    background: "none",
+                    border: "none",
+                    borderTop: "1px solid var(--border)",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontSize: 11,
+                  }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M2 2h6v1H2z" />
+                    <path d="M3 3v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V3" />
+                  </svg>
+                  <span>Clear history</span>
                 </button>
               )}
 
