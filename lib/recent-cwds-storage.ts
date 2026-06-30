@@ -57,7 +57,7 @@ export function getAll(): RecentCwd[] {
  * @returns 更新后的目录列表
  */
 export function add(path: string): RecentCwd[] {
-  if (!path || typeof path !== "string") {
+  if (!path || typeof path !== "string" || !isValidPath(path)) {
     console.warn("[recent-cwds] Invalid path:", path);
     return getAll();
   }
@@ -117,6 +117,17 @@ export function clear(): void {
   } catch (e) {
     console.warn("[recent-cwds] Failed to clear localStorage:", e);
   }
+}
+
+/**
+ * 验证路径是否合法
+ * @param path 要验证的路径
+ * @returns true=合法, false=不合法
+ */
+function isValidPath(path: string): boolean {
+  if (path.length > 500) return false;
+  if (path.includes('..')) return false;
+  return true;
 }
 
 /**

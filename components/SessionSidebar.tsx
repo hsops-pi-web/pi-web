@@ -514,9 +514,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      removeCwd(cwd.path);
+                      const nextCwds = removeCwd(cwd.path);
                       if (cwd.path === selectedCwd) {
-                        setSelectedCwd(recentCwds.length > 1 ? recentCwds[0].path : null);
+                        setSelectedCwd(nextCwds.length > 0 ? nextCwds[0].path : null);
                       }
                     }}
                     style={{
@@ -569,8 +569,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    clearCwds();
-                    setSelectedCwd(null);
+                    if (confirm("确定要清空所有历史目录吗？")) {
+                      clearCwds();
+                      setSelectedCwd(null);
+                    }
                   }}
                   style={{
                     display: "flex",

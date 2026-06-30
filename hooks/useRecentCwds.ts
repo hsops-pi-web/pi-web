@@ -20,10 +20,7 @@ export function useRecentCwds() {
 
       const validCwds = loaded.filter((item, index) => {
         const result = validationResults[index];
-        return (
-          result.status === "fulfilled" &&
-          (result.value === true || result.value === undefined)
-        );
+        return result.status === "fulfilled" && result.value === true;
       });
 
       if (validCwds.length < loaded.length) {
@@ -52,9 +49,10 @@ export function useRecentCwds() {
     setCwds(updated);
   }, []);
 
-  const removeCwd = useCallback((path: string) => {
+  const removeCwd = useCallback((path: string): RecentCwd[] => {
     const updated = remove(path);
     setCwds(updated);
+    return updated;
   }, []);
 
   const clearCwds = useCallback(() => {
