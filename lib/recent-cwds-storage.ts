@@ -48,3 +48,40 @@ export function getAll(): RecentCwd[] {
     return [];
   }
 }
+
+/**
+ * 添加一个目录到历史记录
+ * - 如果已存在，移到开头并更新时间戳
+ * - 保持最多 MAX_RECENT_CWDS 个记录
+ * @param path 目录路径
+ * @returns 更新后的目录列表
+ */
+export function add(path: string): RecentCwd[] {
+  if (!path || typeof path !== "string") {
+    console.warn("[recent-cwds] Invalid path:", path);
+    return getAll();
+  }
+
+  const current = getAll();
+  const now = new Date().toISOString();
+
+  // 移除已存在的相同路径
+  const filtered = current.filter((item) => item.path !== path);
+
+  // 添加到开头
+  const updated: RecentCwd[] = [
+    { path, timestamp: now },
+    ...filtered,
+  ];
+
+  // 限制数量
+  const limited = updated.slice(0, MAX_RECENT_CWDS);
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(limited));
+  } catch (e) {
+    console.warn("[recent-cwds] Failed to save to localStorage:", e);
+  }
+
+  return limited;
+}
