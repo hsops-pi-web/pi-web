@@ -123,10 +123,12 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 先取 session 用户名（无则 401），过滤 `listAllSessions()`，
 只保留 cwd 落在 `~/pi-users/<username>` 下的会话。
 
-### 会话详情 /api/sessions/[id]（GET）与 /api/sessions/[id]/context（GET）
+### 会话详情 /api/sessions/[id]（GET / PATCH / DELETE）与 /api/sessions/[id]/context（GET）
 1. 取 session 用户名，无则 401。
 2. 读该 pi session 的 cwd（header），校验在 `~/pi-users/<username>` 下。
 3. 不属于当前用户 → **404**（不用 403，不泄露 id 是否存在）。
+4. `/api/sessions/[id]` 的三个方法 GET / PATCH / DELETE 都必须做上述 cwd 归属校验，
+   不仅 GET。PATCH（重命名/打标签等）、DELETE（删会话）越权同样返 404。
 
 ### Agent /api/agent/[id]（POST/相关）与 /api/agent/[id]/events（SSE）
 1. 取 session 用户名，无则 401。
@@ -139,18 +141,27 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 
 ### 删除 DELETE /api/files/[...path]（新增）
 1. 取 session 用户名，无则 401。
-2. 目标路径 `realpathSync` 解析后必须在 `~/pi-users/<username>` 内，否则 403。
+2. 归属校验：对目标路径的**父目录**做 `realpathSync` 解析，确认解析结果仍在
+   `~/pi-users/<username>` 内，否则 403。（用父目录解析，避免目标本身是 symlink 时
+   `realpathSync` 跳到链接目标。）
 3. 拒绝删除用户根目录本身（只能删目录下的内容）。
 4. "使用中"检测：若目标文件/目录属于某个运行中 session 的 cwd 或其子路径，
    返回一个需确认标志（如 `{needConfirm:true, reason:"in_use"}`），前端二次确认后带
    `?force=1` 再次请求方执行。
-5. 执行：文件 `fs.rmSync(path)`；目录 `fs.rmSync(path, {recursive:true})`（允许递归、
-   允许隐藏文件）。
+5. 删除语义（symlink）：`realpath` 只用于**归属校验**，实际删除针对用户请求的
+   **原始路径**。先 `fs.lstatSync(原始路径)` 判断类型：
+   - 若原始路径是 symlink → `fs.unlinkSync` 只删链接本身，不删链接指向的目标。
+   - 若是普通文件 → `fs.rmSync(path)`。
+   - 若是目录 → `fs.rmSync(path, {recursive:true})`（允许递归、允许隐藏文件）。
 6. 返回成功/失败 JSON，失败带可读 reason。
 
 ### 新建会话 / agent 的 cwd 约束
-`/api/agent/new`、`/api/sessions/new` 收到的 cwd `realpathSync` 后必须在用户目录内，
-否则 400。
+`/api/agent/new`、`/api/sessions/new`：
+- 若前端**未传** cwd → 默认使用 `~/pi-users/<username>`。
+- 若前端**传了** cwd → `realpathSync` 解析后必须在 `~/pi-users/<username>` 内，
+  否则 400。
+- 即用户目录是唯一允许的工作根，前端传入值仅作为用户目录内的子路径选择，
+  无法指定目录外路径。
 
 ### /api/default-cwd（POST）
 改为返回/创建 `~/pi-users/<username>` 作为该用户默认工作目录（替换原 `~/pi-cwd-<日期>`）。
@@ -246,7 +257,8 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 
 隔离与越权：
 - 用户 A 无法列出 / 读取 / 删除用户 B 目录下文件（403）。
-- A 直接请求 B 的 session id → 404。
+- A 直接请求 B 的 session id（GET）→ 404。
+- A 通过 PATCH/DELETE 操作 B 的 session id → 404。
 - A 直接请求 B 的 session context → 404。
 - A 不能通过 `/api/agent/[id]` 向 B 的 session 发消息 → 404。
 - A 不能通过 SSE `/api/agent/[id]/events` 订阅 B 的 session → 404。
@@ -258,3 +270,4 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 - A 可删自己目录下文件与子目录（递归、含隐藏文件）。
 - 删根目录本身被拒。
 - 删使用中文件返回 needConfirm，force 后可删。
+- 删除指向目录外的 symlink：只删链接本身，目标文件保留不动。
