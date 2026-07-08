@@ -1,5 +1,6 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { getRpcSession } from "@/lib/rpc-manager";
 import { getSessionUser } from "@/lib/auth/session";
 import { resolveExistingAndCheck } from "@/lib/auth/paths";
 
@@ -17,7 +18,12 @@ export async function checkSessionOwnership(
   const username = getSessionUser(req);
   if (!username) return { ok: false, status: 401 };
 
-  const filePath = await resolveSessionPath(id);
+  // Fast path: a running session knows its own file even before that file has
+  // been indexed by resolveSessionPath. Without this, events/agent requests for
+  // a brand-new session (still mid-run, .jsonl not yet on disk/in the index)
+  // 404 until the run finishes — the client then reconnects in a tight loop.
+  const running = getRpcSession(id);
+  const filePath = running?.sessionFile || (await resolveSessionPath(id));
   if (!filePath) return { ok: false, status: 404 };
 
   const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? "";
