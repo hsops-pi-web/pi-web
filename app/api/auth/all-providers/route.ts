@@ -1,11 +1,16 @@
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 // Providers that use OAuth — handled separately via /api/auth/providers
 const OAUTH_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex"]);
 
-export async function GET() {
+export async function GET(req: Request) {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
   const authStorage = AuthStorage.create();
   const registry = ModelRegistry.create(authStorage);
   const all = registry.getAll();

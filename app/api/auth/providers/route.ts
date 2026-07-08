@@ -1,8 +1,13 @@
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
   const authStorage = AuthStorage.create();
   const providers = authStorage.getOAuthProviders();
 

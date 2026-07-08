@@ -3,6 +3,7 @@ import {
   DEFAULT_FUNASR_MAX_AUDIO_MB,
   isAcceptedFunasrAudio,
 } from "@/lib/funasr";
+import { getSessionUser } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
@@ -73,6 +74,9 @@ async function readFunasrResponse(res: Response): Promise<unknown> {
 }
 
 export async function POST(req: Request) {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
   try {
     const form = await req.formData();
     const file = form.get("file");

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getSessionUser } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -26,11 +27,16 @@ function writeModelsJson(data: Record<string, unknown>): void {
   writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
   return NextResponse.json(readModelsJson());
 }
 
 export async function PUT(req: Request) {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
   try {
     const body = await req.json() as Record<string, unknown>;
     writeModelsJson(body);

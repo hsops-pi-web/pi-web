@@ -4,6 +4,8 @@ import { homedir } from "os";
 import path from "path";
 import { NextResponse } from "next/server";
 import { DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, isAcceptedDoc } from "@/lib/upload";
+import { getSessionUser } from "@/lib/auth/session";
+import { resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
 
 function expandHomePath(p: string): string {
   if (p === "~") return homedir();
@@ -35,6 +37,9 @@ function uniquePath(dir: string, name: string): string {
 
 export async function POST(req: Request) {
   try {
+    const username = getSessionUser(req);
+    if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
     const form = await req.formData();
     const rawCwd = form.get("cwd");
     if (typeof rawCwd !== "string" || !rawCwd) {
@@ -44,6 +49,13 @@ export async function POST(req: Request) {
     const cwd = expandHomePath(rawCwd);
     if (!existsSync(cwd)) {
       return NextResponse.json({ error: `Directory does not exist: ${rawCwd}` }, { status: 400 });
+    }
+
+    const cwdAllowed = existsSync(cwd)
+      ? resolveExistingAndCheck(cwd, username)
+      : resolveParentAndCheck(cwd, username);
+    if (!cwdAllowed) {
+      return NextResponse.json({ error: "cwd 必须在你的用户目录内" }, { status: 400 });
     }
 
     const files = form.getAll("files").filter((file): file is File => file instanceof File);
