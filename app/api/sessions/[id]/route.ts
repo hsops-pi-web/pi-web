@@ -9,6 +9,18 @@ import {
   listAllSessions,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { getSessionUser } from "@/lib/auth/session";
+import { resolveExistingAndCheck } from "@/lib/auth/paths";
+
+async function assertOwned(req: Request, filePath: string): Promise<Response | null> {
+  const username = getSessionUser(req);
+  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? "";
+  if (!cwd || !resolveExistingAndCheck(cwd, username)) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+  return null;
+}
 
 export async function GET(
   req: Request,
@@ -20,6 +32,9 @@ export async function GET(
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
+
+    const denied = await assertOwned(req, filePath);
+    if (denied) return denied;
 
     const sm = SessionManager.open(filePath);
     const entries = sm.getEntries() as never;
@@ -91,6 +106,9 @@ export async function PATCH(
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
+    const denied = await assertOwned(req, filePath);
+    if (denied) return denied;
+
     const sm = SessionManager.open(filePath);
     sm.appendSessionInfo(name.trim());
     return NextResponse.json({ ok: true });
@@ -101,7 +119,7 @@ export async function PATCH(
 
 // DELETE /api/sessions/[id]
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -110,6 +128,8 @@ export async function DELETE(
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
+    const denied = await assertOwned(req, filePath);
+    if (denied) return denied;
 
     // Read header before deleting to get parentSession path
     const firstLine = readFileSync(filePath, "utf8").split("\n")[0];
