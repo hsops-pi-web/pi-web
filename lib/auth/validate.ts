@@ -1,5 +1,5 @@
-const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
-const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+export const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
+export const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
 export function isValidUsername(name: string): boolean {
   return typeof name === "string" && USERNAME_RE.test(name);

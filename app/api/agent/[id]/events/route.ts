@@ -1,8 +1,6 @@
-import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { getSessionUser } from "@/lib/auth/session";
-import { resolveExistingAndCheck } from "@/lib/auth/paths";
+import { checkSessionOwnership } from "@/lib/auth/session-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,27 +11,18 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const username = getSessionUser(req);
-  if (!username) return new Response("未登录", { status: 401 });
-  {
-    const fp = await resolveSessionPath(id);
-    if (!fp) return new Response("Session not found", { status: 404 });
-    const cwd = SessionManager.open(fp).getHeader()?.cwd ?? "";
-    if (!resolveExistingAndCheck(cwd, username)) {
-      return new Response("Session not found", { status: 404 });
-    }
+  const guard = await checkSessionOwnership(req, id);
+  if (!guard.ok) {
+    const msg = guard.status === 401 ? "未登录" : "Session not found";
+    return new Response(msg, { status: guard.status });
   }
 
   // Fast path: already-running session
   let session = getRpcSession(id);
   if (!session || !session.isAlive()) {
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return new Response("Session not found", { status: 404 });
-    }
-    const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? process.cwd();
+    const cwd = SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
     try {
-      ({ session } = await startRpcSession(id, filePath, cwd));
+      ({ session } = await startRpcSession(id, guard.filePath, cwd));
     } catch (error) {
       return new Response(`Failed to start agent: ${error}`, { status: 500 });
     }

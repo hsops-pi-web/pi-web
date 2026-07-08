@@ -1,9 +1,7 @@
 "use client";
 
 import { useState } from "react";
-
-const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
-const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+import { USERNAME_RE, PASSWORD_RE } from "@/lib/auth/validate";
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "register">("login");

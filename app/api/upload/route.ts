@@ -5,7 +5,7 @@ import path from "path";
 import { NextResponse } from "next/server";
 import { DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, isAcceptedDoc } from "@/lib/upload";
 import { getSessionUser } from "@/lib/auth/session";
-import { resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
+import { resolveExistingAndCheck } from "@/lib/auth/paths";
 
 function expandHomePath(p: string): string {
   if (p === "~") return homedir();
@@ -51,10 +51,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Directory does not exist: ${rawCwd}` }, { status: 400 });
     }
 
-    const cwdAllowed = existsSync(cwd)
-      ? resolveExistingAndCheck(cwd, username)
-      : resolveParentAndCheck(cwd, username);
-    if (!cwdAllowed) {
+    // 上传目标目录必然已存在（上面已提前返回），故只需校验实际路径归属。
+    if (!resolveExistingAndCheck(cwd, username)) {
       return NextResponse.json({ error: "cwd 必须在你的用户目录内" }, { status: 400 });
     }
 

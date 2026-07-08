@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { getSessionUser } from "@/lib/auth/session";
-import { resolveExistingAndCheck } from "@/lib/auth/paths";
+import { checkSessionOwnership } from "@/lib/auth/session-guard";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -12,15 +10,10 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
-  {
-    const fp = await resolveSessionPath(id);
-    if (!fp) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    const cwd = SessionManager.open(fp).getHeader()?.cwd ?? "";
-    if (!resolveExistingAndCheck(cwd, username)) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
+  const guard = await checkSessionOwnership(req, id);
+  if (!guard.ok) {
+    const msg = guard.status === 401 ? "未登录" : "Session not found";
+    return NextResponse.json({ error: msg }, { status: guard.status });
   }
 
   try {
@@ -33,14 +26,9 @@ export async function POST(
       return NextResponse.json({ success: true, data: result });
     }
 
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
+    const cwd = SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
 
-    const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? process.cwd();
-
-    const { session } = await startRpcSession(id, filePath, cwd);
+    const { session } = await startRpcSession(id, guard.filePath, cwd);
     const result = await session.send(body);
 
     return NextResponse.json({ success: true, data: result });
@@ -56,15 +44,10 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
-  {
-    const fp = await resolveSessionPath(id);
-    if (!fp) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    const cwd = SessionManager.open(fp).getHeader()?.cwd ?? "";
-    if (!resolveExistingAndCheck(cwd, username)) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
+  const guard = await checkSessionOwnership(req, id);
+  if (!guard.ok) {
+    const msg = guard.status === 401 ? "未登录" : "Session not found";
+    return NextResponse.json({ error: msg }, { status: guard.status });
   }
 
   try {

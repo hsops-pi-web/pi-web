@@ -3,23 +3,16 @@ import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "
 import { join } from "path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
-  resolveSessionPath,
   invalidateSessionPathCache,
   buildSessionContext,
   listAllSessions,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
-import { getSessionUser } from "@/lib/auth/session";
-import { resolveExistingAndCheck } from "@/lib/auth/paths";
+import { checkSessionOwnership } from "@/lib/auth/session-guard";
 
-async function assertOwned(req: Request, filePath: string): Promise<Response | null> {
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
-  const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? "";
-  if (!cwd || !resolveExistingAndCheck(cwd, username)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
-  }
-  return null;
+function ownershipDenied(status: 401 | 404): Response {
+  const msg = status === 401 ? "未登录" : "Session not found";
+  return NextResponse.json({ error: msg }, { status });
 }
 
 export async function GET(
@@ -28,13 +21,9 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const denied = await assertOwned(req, filePath);
-    if (denied) return denied;
+    const guard = await checkSessionOwnership(req, id);
+    if (!guard.ok) return ownershipDenied(guard.status);
+    const filePath = guard.filePath;
 
     const sm = SessionManager.open(filePath);
     const entries = sm.getEntries() as never;
@@ -102,14 +91,10 @@ export async function PATCH(
     if (typeof name !== "string") {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-    const denied = await assertOwned(req, filePath);
-    if (denied) return denied;
+    const guard = await checkSessionOwnership(req, id);
+    if (!guard.ok) return ownershipDenied(guard.status);
 
-    const sm = SessionManager.open(filePath);
+    const sm = SessionManager.open(guard.filePath);
     sm.appendSessionInfo(name.trim());
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -124,12 +109,9 @@ export async function DELETE(
 ) {
   const { id } = await params;
   try {
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-    const denied = await assertOwned(req, filePath);
-    if (denied) return denied;
+    const guard = await checkSessionOwnership(req, id);
+    if (!guard.ok) return ownershipDenied(guard.status);
+    const filePath = guard.filePath;
 
     // Read header before deleting to get parentSession path
     const firstLine = readFileSync(filePath, "utf8").split("\n")[0];

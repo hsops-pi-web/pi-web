@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { resolveSessionPath, buildSessionContext } from "@/lib/session-reader";
-import { getSessionUser } from "@/lib/auth/session";
-import { resolveExistingAndCheck } from "@/lib/auth/paths";
+import { buildSessionContext } from "@/lib/session-reader";
+import { checkSessionOwnership } from "@/lib/auth/session-guard";
 
 export async function GET(
   req: Request,
@@ -13,20 +12,13 @@ export async function GET(
   const leafId = url.searchParams.get("leafId") ?? undefined;
 
   try {
-    const username = getSessionUser(req);
-    if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
-
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const guard = await checkSessionOwnership(req, id);
+    if (!guard.ok) {
+      const msg = guard.status === 401 ? "未登录" : "Session not found";
+      return NextResponse.json({ error: msg }, { status: guard.status });
     }
 
-    const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? "";
-    if (!cwd || !resolveExistingAndCheck(cwd, username)) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const sm = SessionManager.open(filePath);
+    const sm = SessionManager.open(guard.filePath);
     const context = buildSessionContext(sm.getEntries() as never, leafId);
 
     return NextResponse.json({ context });
