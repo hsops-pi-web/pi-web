@@ -66,12 +66,26 @@ export function AppShell() {
 
   // Auth user — fetch on mount, redirect to /login if not authenticated
   const [authUser, setAuthUser] = useState<string | null>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.username) setAuthUser(d.username); else window.location.href = "/login"; })
       .catch(() => {});
   }, []);
+
+  // Close the user menu on outside click
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [userMenuOpen]);
 
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | null>(null);
@@ -517,13 +531,53 @@ export function AppShell() {
             );
           })()}
           {authUser && (
-            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingRight: 12 }}>
-              <span style={{ color: "var(--text-dim)" }}>{authUser}</span>
+            <div ref={userMenuRef} style={{ position: "relative", paddingRight: 12 }}>
               <button
-                onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
-                style={{ fontSize: 12, cursor: "pointer" }}
-              >登出</button>
-            </span>
+                onClick={() => setUserMenuOpen((v) => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer",
+                  background: userMenuOpen ? "var(--bg-hover)" : "none", border: "none",
+                  color: "var(--text-muted)", padding: "4px 8px", borderRadius: 6,
+                }}
+                title="账户"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <circle cx="8" cy="5" r="3" /><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
+                </svg>
+                {authUser}
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ transform: userMenuOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}>
+                  <polyline points="2 3.5 5 6.5 8 3.5" />
+                </svg>
+              </button>
+              {userMenuOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", right: 12, minWidth: 140,
+                  background: "var(--bg-panel)", border: "1px solid var(--border)",
+                  borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.25)", zIndex: 600,
+                  padding: 4,
+                }}>
+                  <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+                    已登录：{authUser}
+                  </div>
+                  <button
+                    onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%",
+                      padding: "8px 10px", fontSize: 12, cursor: "pointer",
+                      background: "none", border: "none", color: "var(--text)",
+                      borderRadius: 5, textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M6 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H6" /><path d="M10.5 11 14 8l-3.5-3M14 8H6" />
+                    </svg>
+                    退出登录
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {/* Top panel dropdown — shared, only one active at a time */}
           {activeTopPanel && topPanelPos && (

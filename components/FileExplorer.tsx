@@ -299,7 +299,7 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
           onAtMention={onAtMention}
           expandedPaths={expandedPaths}
           onToggleExpanded={handleToggleExpanded}
-          refreshKey={refreshKey}
+          refreshKey={(refreshKey ?? 0) + localRefresh}
           bumpRefresh={bumpRefresh}
         />
       ))}

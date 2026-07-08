@@ -9,6 +9,7 @@ export default function LoginPage() {
   const [keyword, setKeyword] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function submitGate() {
@@ -44,80 +45,172 @@ export default function LoginPage() {
     else setMsg("用户名或密码错误");
   }
 
-  const inputStyle = {
-    width: "100%", marginBottom: 8, padding: "6px 8px",
-    background: "var(--bg-panel)", color: "var(--text)",
-    border: "1px solid var(--border)", borderRadius: 4, fontSize: 13,
-    boxSizing: "border-box" as const,
-  } as const;
-  const btnStyle = {
-    padding: "6px 12px", background: "var(--accent)", color: "#fff",
-    border: "none", borderRadius: 4, cursor: "pointer", fontSize: 13,
-  } as const;
+  function submit() {
+    if (mode === "register" && !gatePassed) submitGate();
+    else if (mode === "login") submitLogin();
+    else submitRegister();
+  }
+
+  const showForm = mode === "login" || gatePassed;
+  const isError = msg !== null && msg !== "注册成功，请登录";
 
   return (
-    <div style={{
-      maxWidth: 360, margin: "80px auto", padding: 24,
-      background: "var(--bg-panel)", border: "1px solid var(--border)",
-      borderRadius: 8, color: "var(--text)",
-    }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button
-          onClick={() => { setMode("login"); setMsg(null); }}
-          disabled={mode === "login"}
-          style={{ ...btnStyle, background: mode === "login" ? "var(--accent)" : "var(--bg-hover)", color: mode === "login" ? "#fff" : "var(--text-dim)" }}
-        >登录</button>
-        <button
-          onClick={() => { setMode("register"); setMsg(null); }}
-          disabled={mode === "register"}
-          style={{ ...btnStyle, background: mode === "register" ? "var(--accent)" : "var(--bg-hover)", color: mode === "register" ? "#fff" : "var(--text-dim)" }}
-        >注册</button>
-      </div>
-
-      {mode === "register" && !gatePassed ? (
-        <div>
-          <label style={{ fontSize: 12, color: "var(--text-dim)" }}>注册关键词</label>
-          <input
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            style={inputStyle}
-          />
-          <button onClick={submitGate} style={btnStyle}>验证关键词</button>
+    <div style={S.page} className="login-page">
+      <div style={S.card}>
+        <div style={S.brand}>
+          <span style={S.logo}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="2" width="12" height="12" rx="2" /><path d="M5 6h6M5 9h4" />
+            </svg>
+          </span>
+          <h1 style={S.brandName}>pi-web</h1>
         </div>
-      ) : (
-        <div>
-          <label style={{ fontSize: 12, color: "var(--text-dim)" }}>用户名</label>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            style={inputStyle}
-          />
-          <label style={{ fontSize: 12, color: "var(--text-dim)" }}>密码</label>
-          <div style={{ position: "relative" }}>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={inputStyle}
-            />
-            {mode === "register" && (
-              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: -4, marginBottom: 8 }}>
-                至少 8 位，含大小写字母和数字
-              </div>
-            )}
-          </div>
+        <p style={S.subtitle}>登录后进入你的专属工作区</p>
+
+        <div style={S.tabs}>
           <button
-            onClick={mode === "login" ? submitLogin : submitRegister}
-            style={{ ...btnStyle, marginTop: 8 }}
-          >
-            {mode === "login" ? "登录" : "提交注册"}
-          </button>
+            style={{ ...S.tab, ...(mode === "login" ? S.tabActive : {}) }}
+            onClick={() => { setMode("login"); setMsg(null); }}
+          >登录</button>
+          <button
+            style={{ ...S.tab, ...(mode === "register" ? S.tabActive : {}) }}
+            onClick={() => { setMode("register"); setMsg(null); }}
+          >注册</button>
         </div>
-      )}
 
-      {msg && (
-        <div style={{ marginTop: 12, color: "#e5484d", fontSize: 13 }}>{msg}</div>
-      )}
+        {mode === "register" && !gatePassed ? (
+          <>
+            <div style={S.field}>
+              <div style={S.label}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M8 1l6 3v4c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7V4z" /></svg>
+                注册关键词
+              </div>
+              <div style={S.inputWrap}>
+                <input
+                  style={S.input}
+                  value={keyword}
+                  placeholder="输入邀请关键词"
+                  onChange={(e) => setKeyword(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={S.field}>
+              <div style={S.label}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="5" r="3" /><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" /></svg>
+                用户名
+              </div>
+              <div style={S.inputWrap}>
+                <input
+                  style={S.input}
+                  value={username}
+                  placeholder={mode === "register" ? "仅字母和数字，字母开头" : "用户名"}
+                  onChange={(e) => setUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                />
+              </div>
+            </div>
+
+            <div style={S.field}>
+              <div style={S.label}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5 7V5a3 3 0 0 1 6 0v2" /></svg>
+                密码
+              </div>
+              <div style={S.inputWrap}>
+                <input
+                  style={S.input}
+                  type={showPw ? "text" : "password"}
+                  value={password}
+                  placeholder="••••••••"
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                />
+                <button style={S.togglePw} onClick={() => setShowPw((v) => !v)} aria-label={showPw ? "隐藏密码" : "显示密码"}>
+                  {showPw ? (
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" /><circle cx="8" cy="8" r="2" /><line x1="2" y1="14" x2="14" y2="2" /></svg>
+                  ) : (
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" /><circle cx="8" cy="8" r="2" /></svg>
+                  )}
+                </button>
+              </div>
+              {mode === "register" && (
+                <div style={S.hint}>至少 8 位，含大小写字母和数字</div>
+              )}
+            </div>
+          </>
+        )}
+
+        <button style={S.btn} onClick={submit}>
+          {mode === "login" ? "登 录" : gatePassed ? "提交注册" : "验证关键词"}
+        </button>
+
+        <div style={{ ...S.msg, color: isError ? "var(--err, #f87171)" : "var(--accent)" }}>
+          {msg ?? ""}
+        </div>
+
+        <div style={S.foot}>
+          按 <kbd style={S.kbd}>Enter</kbd> 提交
+        </div>
+      </div>
     </div>
   );
 }
+
+const S: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    background: "var(--bg)", color: "var(--text)",
+    backgroundImage:
+      "radial-gradient(600px 400px at 30% 20%, rgba(96,165,250,0.05), transparent 70%), radial-gradient(500px 500px at 80% 90%, rgba(96,165,250,0.03), transparent 70%)",
+  },
+  card: {
+    width: 380, padding: "40px 36px",
+    background: "var(--bg-panel)", border: "1px solid var(--border)",
+    borderRadius: 12, boxShadow: "0 1px 2px rgba(0,0,0,0.20)",
+  },
+  brand: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 },
+  logo: {
+    width: 32, height: 32, border: "1px solid var(--border)", borderRadius: 8,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    color: "var(--accent)", flex: "0 0 auto",
+  },
+  brandName: { fontSize: 18, fontWeight: 600, margin: 0, letterSpacing: "-0.02em" },
+  subtitle: { fontSize: 12, color: "var(--text-dim)", margin: "0 0 28px 42px", letterSpacing: "0.02em" },
+  tabs: { display: "flex", gap: 4, marginBottom: 24, background: "var(--bg)", padding: 4, borderRadius: 8 },
+  tab: {
+    flex: 1, padding: "8px 0", textAlign: "center", fontSize: 13, cursor: "pointer",
+    border: "none", background: "none", color: "var(--text-dim)", borderRadius: 6,
+    fontFamily: "inherit", transition: "all .15s ease",
+  },
+  tabActive: { background: "var(--bg-selected)", color: "var(--text)" },
+  field: { marginBottom: 16 },
+  label: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", marginBottom: 6 },
+  inputWrap: { position: "relative" },
+  input: {
+    width: "100%", height: 40, padding: "0 12px", boxSizing: "border-box",
+    background: "var(--bg)", color: "var(--text)",
+    border: "1px solid var(--border)", borderRadius: 6,
+    fontSize: 13, fontFamily: "inherit", outline: "none",
+  },
+  togglePw: {
+    position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+    background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer",
+    padding: 4, display: "flex",
+  },
+  hint: { fontSize: 11, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.5 },
+  btn: {
+    width: "100%", height: 42, marginTop: 8,
+    background: "var(--accent)", color: "#0d1117",
+    border: "none", borderRadius: 6, fontSize: 14, fontWeight: 600,
+    cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.02em",
+  },
+  msg: { marginTop: 14, fontSize: 12, minHeight: 16, textAlign: "center" },
+  foot: { marginTop: 22, textAlign: "center", fontSize: 11, color: "var(--text-dim)" },
+  kbd: {
+    fontSize: 10, padding: "2px 5px", border: "1px solid var(--border)",
+    borderRadius: 4, background: "var(--bg)", color: "var(--text-muted)",
+  },
+};

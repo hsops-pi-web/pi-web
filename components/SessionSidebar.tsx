@@ -239,6 +239,25 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }).catch(() => {});
   }, []);
 
+  // On first load, default to the logged-in user's own directory so they land
+  // straight in their workspace — no manual "use default directory" click.
+  // Skipped when restoring a specific session from the URL (?session=...).
+  const defaultCwdDone = useRef(false);
+  useEffect(() => {
+    if (defaultCwdDone.current) return;
+    if (initialSessionId) return; // URL restore path picks the session's cwd
+    defaultCwdDone.current = true;
+    authFetch("/api/default-cwd", { method: "POST" })
+      .then((r) => r.json())
+      .then((d: { cwd?: string }) => {
+        if (d.cwd) {
+          setSelectedCwd((prev) => prev ?? d.cwd!);
+          addCwd(d.cwd);
+        }
+      })
+      .catch(() => {});
+  }, [initialSessionId, addCwd]);
+
   const restoredRef = useRef(false);
 
   useEffect(() => {

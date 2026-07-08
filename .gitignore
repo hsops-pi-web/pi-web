@@ -45,3 +45,6 @@ next-env.d.ts
 /.pi/settings.json
 /.claude/
 /CLAUDE.md
+
+# temporary UI mockup previews (mockup 预览临时目录)
+/.preview/

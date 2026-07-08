@@ -1,18 +1,21 @@
 # pi-web-auth 用户认证与目录隔离 设计文档
 
 日期：2026-07-07
-项目：pi-web-auth（基于 pi-web 二次开发，独立部署于 8033 端口）
+项目：pi-web-auth（基于 pi-web 二次开发，部署于 8000 端口）
+
+> 端口说明（2026-07-08 更新）：开发期本服务跑在 8033、与老 pi-web(8000) 并列验证；
+> 验证通过后老 pi-web 已停止并禁用自启，本服务改为占用 8000。以下 8000 即本服务。
 
 ## 1. 背景与目标
 
-现有 pi-web 运行在 8000 端口，宿主机 systemd 用户服务直跑，无任何认证，
+原 pi-web 运行在 8000 端口，宿主机 systemd 用户服务直跑，无任何认证，
 任何访问者可读取所有会话工作目录下的文件。本项目在其副本基础上增加：
 
 1. 用户注册 + 登录验证界面（注册需前置关键词，用户名规则见下）。
 2. 登录用户只能使用自己的目录（目录名 = 用户名）。
 3. 登录用户可删除自己目录下的文件。
 
-新服务独立运行在 8033 端口，与 8000 的 pi-web 并列，8000 服务不改动。
+本服务最终占用 8000 端口，取代无认证的老 pi-web（老服务已停止并禁用自启）。
 
 ## 2. 已确认决策
 
@@ -36,7 +39,7 @@
 | 删除交互 | FileExplorer 文件树内删除按钮（hover 显示）+ 确认弹窗 |
 | 删除范围 | 允许递归删子目录、允许删隐藏文件；删"使用中"文件需额外提醒并二次确认 |
 | symlink 处理 | 删除/读取前 `fs.realpathSync` 解析真实路径再校验，防逃逸 |
-| 端口 | 8033 |
+| 端口 | 8000（开发期用 8033 与老服务并列验证，上线后取代老 pi-web 占用 8000） |
 | 部署 | 宿主机直跑（systemd 用户服务），与现有 pi-web 一致；SQLite 为嵌入式，非独立服务，不容器化 |
 
 ## 3. 架构总览
@@ -211,12 +214,12 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 
 ## 9. 端口与部署
 
-- `package.json`：`dev` / `start` 的 `-p 8000` → `-p 8033`。
-- 部署前查端口占用，确认 8033 空闲。
-- 原 8000 的 pi-web 服务不改动、继续运行。
-- 新建独立 systemd 用户服务（如 `pi-web-auth.service`），`WorkingDirectory` 指向
-  本项目，`ExecStart` 用 `next start`（-p 8033 由 package.json 决定，或在 service 里
-  显式指定），并设置 `Environment=REGISTER_KEYWORD=tsingmao`（或从 env 文件读）。
+- `package.json`：`dev` / `start` 用 `-p 8000`。
+- 老 pi-web（无认证，原占 8000）已 `systemctl --user disable --now pi-web` 停止并禁用自启。
+- 独立 systemd 用户服务 `pi-web-auth.service`，`WorkingDirectory` 指向本项目，
+  `ExecStart` 用 node 绝对路径直接跑 `next start -p 8000`（systemd user 环境无 nvm PATH，
+  故用绝对路径而非 `npm run start`），并设置 `Environment=REGISTER_KEYWORD=tsingmao`
+  与显式 `Environment=PATH=<nvm bin>:...`。`enable` 开机自启。
 - `~/.pi-web-auth/auth.db` 落宿主机。
 - 新增依赖：`better-sqlite3`（唯一新增）。密码哈希用 Node 内置 `crypto`。
 
@@ -273,3 +276,25 @@ DB 初始化封装在 `lib/auth/db.ts`，进程内单例（挂 globalThis 防热
 - 删根目录本身被拒。
 - 删使用中文件返回 needConfirm，force 后可删。
 - 删除指向目录外的 symlink：只删链接本身，目标文件保留不动。
+
+## 13. 变更记录
+
+### 2026-07-08 上线后优化与端口迁移
+- **端口迁移**：老 pi-web（无认证，占 8000）已停止并禁用自启；本服务从开发期的 8033
+  改为占用 8000（systemd service 与 package.json 同步）。
+- **登录页重设计**：深色专业风（沿用主应用 CSS 变量与等宽字体），品牌区 + 登录/注册
+  Tab + 图标输入框 + 密码显隐 + 焦点光环，替换原极简样式。见 `app/login/page.tsx`、
+  `app/globals.css`（新增 `--err` 变量与 `.login-page` 交互态）。
+- **登录后自动进用户目录**：`SessionSidebar` 挂载时调 `/api/default-cwd` 自动选中
+  `~/pi-users/<用户名>`，免手动点 "use default directory"；URL 恢复会话（`?session=`）时跳过。
+- **删除文件即时刷新**：`FileExplorer` 把 `localRefresh` 合入传给子节点的 refreshKey，
+  删除（含子目录内）后无需手动刷新即消失。
+- **用户菜单退出**：`AppShell` 顶栏用户名改为可点按钮 + 下拉菜单（含"退出登录"），
+  点外部关闭，替换原裸"登出"按钮。
+
+### 运行期修复（开发阶段）
+- **新会话运行期 events/agent 持续 404**：归属校验 `checkSessionOwnership` 增加运行中
+  会话的 fast-path，信任 `AgentSessionWrapper.cwd`（首轮 header cwd 未落定时不重读文件），
+  见 `lib/auth/session-guard.ts`、`lib/rpc-manager.ts`。
+- **上线前安全加固**：`/api/sessions/[id]/context`、`/api/upload` 补齐鉴权与目录归属校验；
+  一批配置类路由统一加 `getSessionUser` 门禁（防伪造 cookie 绕过）。

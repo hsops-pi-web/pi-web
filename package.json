@@ -17,9 +17,9 @@
     "package.json"
   ],
   "scripts": {
-    "dev": "next dev -p 8033",
+    "dev": "next dev -p 8000",
     "build": "next build --webpack",
-    "start": "next start -p 8033",
+    "start": "next start -p 8000",
     "lint": "eslint .",
     "test": "node --experimental-strip-types --test \"__tests__/lib/auth/**/*.test.ts\"",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
