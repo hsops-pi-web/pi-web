@@ -17,10 +17,11 @@
     "package.json"
   ],
   "scripts": {
-    "dev": "next dev -p 8000",
+    "dev": "next dev -p 8033",
     "build": "next build --webpack",
-    "start": "next start -p 8000",
+    "start": "next start -p 8033",
     "lint": "eslint .",
+    "test": "node --test",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@z_ai/mcp-server": "^0.1.4",
+    "better-sqlite3": "^12.11.1",
     "next": "16.2.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -40,6 +42,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
