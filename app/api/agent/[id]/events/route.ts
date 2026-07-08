@@ -1,6 +1,8 @@
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { getSessionUser } from "@/lib/auth/session";
+import { resolveExistingAndCheck } from "@/lib/auth/paths";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +12,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  const username = getSessionUser(req);
+  if (!username) return new Response("未登录", { status: 401 });
+  {
+    const fp = await resolveSessionPath(id);
+    if (!fp) return new Response("Session not found", { status: 404 });
+    const cwd = SessionManager.open(fp).getHeader()?.cwd ?? "";
+    if (!resolveExistingAndCheck(cwd, username)) {
+      return new Response("Session not found", { status: 404 });
+    }
+  }
 
   // Fast path: already-running session
   let session = getRpcSession(id);
