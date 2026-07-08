@@ -341,7 +341,10 @@ function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       setBust((b) => b + 1);
     });
     es.addEventListener("error", () => setWatching(false));
-    es.onerror = () => setWatching(false);
+    es.onerror = () => {
+      setWatching(false);
+      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
+    };
 
     return () => {
       es.close();
@@ -478,7 +481,10 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       setBust((b) => b + 1);
     });
     es.addEventListener("error", () => setWatching(false));
-    es.onerror = () => setWatching(false);
+    es.onerror = () => {
+      setWatching(false);
+      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
+    };
 
     return () => {
       es.close();
@@ -697,6 +703,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
 
     es.onerror = () => {
       setWatching(false);
+      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
     };
 
     return () => {

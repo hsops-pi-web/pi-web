@@ -1,3 +1,5 @@
+import { authFetch } from "@/lib/client-auth-fetch";
+
 // localStorage 键名
 const STORAGE_KEY = "pi-web-recent-cwds";
 
@@ -137,7 +139,7 @@ function isValidPath(path: string): boolean {
  */
 export async function validate(path: string): Promise<boolean | undefined> {
   try {
-    const response = await fetch("/api/default-cwd", {
+    const response = await authFetch("/api/default-cwd", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cwd: path }),

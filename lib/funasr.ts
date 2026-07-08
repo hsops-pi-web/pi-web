@@ -1,3 +1,5 @@
+import { authFetch } from "@/lib/client-auth-fetch";
+
 export const FUNASR_AUDIO_ACCEPT_ATTR = [
   ".wav",
   ".mp3",
@@ -36,7 +38,7 @@ export async function transcribeFunasrAudio(file: File): Promise<FunasrTranscrip
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch("/api/funasr/transcribe", { method: "POST", body: form });
+  const res = await authFetch("/api/funasr/transcribe", { method: "POST", body: form });
   const body = (await res.json().catch(() => ({}))) as {
     success?: boolean;
     error?: string;
