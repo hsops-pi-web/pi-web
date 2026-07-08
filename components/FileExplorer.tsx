@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { getFileIcon, FolderIcon } from "./FileIcons";
 import { encodeFilePathForApi, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
+import { authFetch } from "@/lib/client-auth-fetch";
 
 interface FileEntry {
   name: string;
@@ -29,7 +30,7 @@ interface Props {
 
 async function fetchEntries(dirPath: string): Promise<FileNode[]> {
   const encoded = encodeFilePathForApi(dirPath);
-  const res = await fetch(`/api/files/${encoded}?type=list`);
+  const res = await authFetch(`/api/files/${encoded}?type=list`);
   if (!res.ok) return [];
   const data = await res.json() as { entries?: FileEntry[] };
   return (data.entries ?? []).map((e) => ({
@@ -51,6 +52,7 @@ function TreeNode({
   expandedPaths,
   onToggleExpanded,
   refreshKey,
+  bumpRefresh,
 }: {
   node: FileNode;
   depth: number;
@@ -60,6 +62,7 @@ function TreeNode({
   expandedPaths: Set<string>;
   onToggleExpanded: (fullPath: string, open: boolean) => void;
   refreshKey?: number;
+  bumpRefresh?: () => void;
 }) {
   const open = expandedPaths.has(node.fullPath);
   const [children, setChildren] = useState<FileNode[]>(node.children ?? []);
@@ -165,7 +168,7 @@ function TreeNode({
             title="Insert path into chat"
             style={{
               position: "absolute",
-              right: 4,
+              right: 56,
               top: "50%",
               transform: "translateY(-50%)",
               display: "flex",
@@ -191,11 +194,38 @@ function TreeNode({
             mention
           </button>
         )}
+        {hovered && (
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!confirm(`确定删除 ${node.name}？不可恢复`)) return;
+              const enc = encodeFilePathForApi(node.fullPath);
+              try {
+                let res = await authFetch(`/api/files/${enc}`, { method: "DELETE" });
+                let data = await res.json().catch(() => ({}));
+                if (data?.needConfirm) {
+                  if (!confirm(`${node.name} 正被会话使用，仍要删除？`)) return;
+                  res = await authFetch(`/api/files/${enc}?force=1`, { method: "DELETE" });
+                  data = await res.json().catch(() => ({}));
+                }
+                if (res.ok) bumpRefresh?.();
+                else alert(data?.error ?? "删除失败");
+              } catch { /* 401 已跳转 */ }
+            }}
+            title="删除"
+            style={{
+              position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)",
+              height: 20, padding: "0 6px", background: "var(--bg-panel)",
+              border: "1px solid var(--border)", borderRadius: 4, color: "#e5484d",
+              cursor: "pointer", fontSize: 11,
+            }}
+          >删除</button>
+        )}
       </div>
       {node.isDir && open && (
         <div>
           {children.map((child) => (
-            <TreeNode key={child.fullPath} node={child} depth={depth + 1} cwd={cwd} onOpenFile={onOpenFile} onAtMention={onAtMention} expandedPaths={expandedPaths} onToggleExpanded={onToggleExpanded} refreshKey={refreshKey} />
+            <TreeNode key={child.fullPath} node={child} depth={depth + 1} cwd={cwd} onOpenFile={onOpenFile} onAtMention={onAtMention} expandedPaths={expandedPaths} onToggleExpanded={onToggleExpanded} refreshKey={refreshKey} bumpRefresh={bumpRefresh} />
           ))}
           {children.length === 0 && loaded && (
             <div style={{ paddingLeft: 8 + (depth + 1) * 14, fontSize: 11, color: "var(--text-dim)", height: 22, display: "flex", alignItems: "center" }}>
@@ -213,6 +243,7 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [localRefresh, setLocalRefresh] = useState(0);
   const prevCwdRef = useRef<string | null>(null);
 
   const handleToggleExpanded = useCallback((fullPath: string, open: boolean) => {
@@ -222,6 +253,8 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
       return next;
     });
   }, []);
+
+  const bumpRefresh = useCallback(() => setLocalRefresh((n) => n + 1), []);
 
   useEffect(() => {
     const cwdChanged = prevCwdRef.current !== cwd;
@@ -236,7 +269,7 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
       .then((entries) => setRoots(entries))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [cwd, refreshKey]);
+  }, [cwd, refreshKey, localRefresh]);
 
   if (loading) {
     return (
@@ -267,6 +300,7 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
           expandedPaths={expandedPaths}
           onToggleExpanded={handleToggleExpanded}
           refreshKey={refreshKey}
+          bumpRefresh={bumpRefresh}
         />
       ))}
       {roots.length === 0 && (

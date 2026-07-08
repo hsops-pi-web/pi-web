@@ -7,11 +7,13 @@
 // Call sites previously repeated the same 5-line fetch block 13× in
 // hooks/useAgentSession.ts. This helper collapses that down to one line.
 
+import { authFetch } from "@/lib/client-auth-fetch";
+
 export async function sendAgentCommand<T = unknown>(
   sessionId: string,
   command: Record<string, unknown>,
 ): Promise<T> {
-  const res = await fetch(`/api/agent/${encodeURIComponent(sessionId)}`, {
+  const res = await authFetch(`/api/agent/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(command),
@@ -32,7 +34,7 @@ export async function uploadFiles(cwd: string, files: File[]): Promise<string[]>
   form.append("cwd", cwd);
   for (const file of files) form.append("files", file);
 
-  const res = await fetch("/api/upload", { method: "POST", body: form });
+  const res = await authFetch("/api/upload", { method: "POST", body: form });
   const body = (await res.json().catch(() => ({}))) as {
     success?: boolean;
     paths?: string[];

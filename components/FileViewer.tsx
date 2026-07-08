@@ -8,6 +8,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "@/hooks/useTheme";
 import { encodeFilePathForApi, getFileDownloadUrl, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import { authFetch } from "@/lib/client-auth-fetch";
 
 interface Props {
   filePath: string;
@@ -632,7 +633,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
 
   const fetchContent = useCallback((filePath: string, isRefresh = false) => {
     const encoded = encodeFilePathForApi(filePath);
-    return fetch(`/api/files/${encoded}?type=read`)
+    return authFetch(`/api/files/${encoded}?type=read`)
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
         if (d.error) {

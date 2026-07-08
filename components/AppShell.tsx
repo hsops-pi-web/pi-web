@@ -64,6 +64,15 @@ export function AppShell() {
     setContextUsage(usage);
   }, []);
 
+  // Auth user — fetch on mount, redirect to /login if not authenticated
+  const [authUser, setAuthUser] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.username) setAuthUser(d.username); else window.location.href = "/login"; })
+      .catch(() => {});
+  }, []);
+
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -507,6 +516,15 @@ export function AppShell() {
               </div>
             );
           })()}
+          {authUser && (
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, paddingRight: 12 }}>
+              <span style={{ color: "var(--text-dim)" }}>{authUser}</span>
+              <button
+                onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+                style={{ fontSize: 12, cursor: "pointer" }}
+              >登出</button>
+            </span>
+          )}
           {/* Top panel dropdown — shared, only one active at a time */}
           {activeTopPanel && topPanelPos && (
             <div style={{

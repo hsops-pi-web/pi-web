@@ -27,6 +27,7 @@ import CohereColorIcon from "@lobehub/icons/es/Cohere/components/Color";
 import PerplexityColorIcon from "@lobehub/icons/es/Perplexity/components/Color";
 import TogetherColorIcon from "@lobehub/icons/es/Together/components/Color";
 import GrokIcon from "@lobehub/icons/es/Grok/components/Mono";
+import { authFetch } from "@/lib/client-auth-fetch";
 
 type IconComponent = React.ComponentType<{ size?: number | string; style?: React.CSSProperties }>;
 
@@ -526,7 +527,7 @@ function ModelDetail({
     if (!model.id.trim() || testState.phase === "testing") return;
     setTestState({ phase: "testing" });
     try {
-      const res = await fetch("/api/models-config/test", {
+      const res = await authFetch("/api/models-config/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ providerName, provider, model }),
@@ -1251,7 +1252,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    fetch("/api/models-config")
+    authFetch("/api/models-config")
       .then((r) => r.json())
       .then((d: ModelsJson) => {
         const normalized = d.providers ? d : { ...d, providers: {} };
@@ -1343,7 +1344,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
     setSaveError(null);
     setSavedOk(false);
     try {
-      const res = await fetch("/api/models-config", {
+      const res = await authFetch("/api/models-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
