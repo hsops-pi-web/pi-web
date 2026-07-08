@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
+import { lstatSync, unlinkSync, rmSync } from "fs";
 import path from "path";
 import { listAllSessions } from "@/lib/session-reader";
 import { getSessionUser } from "@/lib/auth/session";
-import { getUserRoot, resolveExistingAndCheck } from "@/lib/auth/paths";
+import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
+import { isUserRootItself, isPathInUse } from "./delete-helpers";
 
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".next", "dist", "build", "__pycache__",
@@ -342,6 +344,54 @@ export async function GET(
       });
 
     return NextResponse.json({ entries, path: filePath });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  try {
+    const username = getSessionUser(request);
+    if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
+    const { path: segments } = await params;
+    const filePath = filePathFromSegments(segments);
+
+    if (!resolveParentAndCheck(filePath, username)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    if (isUserRootItself(filePath, username)) {
+      return NextResponse.json({ error: "不能删除用户根目录" }, { status: 403 });
+    }
+
+    const force = request.nextUrl.searchParams.get("force") === "1";
+    if (!force) {
+      const cwds = (await listAllSessions())
+        .map((s) => s.cwd)
+        .filter((c): c is string => !!c);
+      if (isPathInUse(filePath, cwds)) {
+        return NextResponse.json({ needConfirm: true, reason: "in_use" });
+      }
+    }
+
+    let stat;
+    try {
+      stat = lstatSync(filePath);
+    } catch {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    if (stat.isSymbolicLink()) {
+      unlinkSync(filePath);               // 只删链接本身
+    } else if (stat.isDirectory()) {
+      rmSync(filePath, { recursive: true });
+    } else {
+      rmSync(filePath);
+    }
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
