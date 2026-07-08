@@ -21,7 +21,7 @@
     "build": "next build --webpack",
     "start": "next start -p 8033",
     "lint": "eslint .",
-    "test": "node --test",
+    "test": "node --experimental-strip-types --test \"__tests__/lib/auth/**/*.test.ts\"",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
