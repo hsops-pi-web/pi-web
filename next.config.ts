@@ -10,6 +10,7 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: __dirname,
   serverExternalPackages: ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"],
   allowedDevOrigins: ['192.168.*.*', '10.16.49.16'],
   env: {
