@@ -18,12 +18,21 @@ export async function checkSessionOwnership(
   const username = getSessionUser(req);
   if (!username) return { ok: false, status: 401 };
 
-  // Fast path: a running session knows its own file even before that file has
-  // been indexed by resolveSessionPath. Without this, events/agent requests for
-  // a brand-new session (still mid-run, .jsonl not yet on disk/in the index)
-  // 404 until the run finishes — the client then reconnects in a tight loop.
+  // Fast path: a running session knows its own file and cwd even before that
+  // file has been indexed. Trust the wrapper's cwd — the on-disk header's cwd
+  // is briefly wrong during the first turn (pi writes process.cwd() before the
+  // real cwd settles), which otherwise 404s every events/agent request until
+  // the run finishes and the client reconnect-loops on it.
   const running = getRpcSession(id);
-  const filePath = running?.sessionFile || (await resolveSessionPath(id));
+  if (running?.isAlive()) {
+    const cwd = running.cwd || SessionManager.open(running.sessionFile).getHeader()?.cwd || "";
+    if (!cwd || !resolveExistingAndCheck(cwd, username)) {
+      return { ok: false, status: 404 };
+    }
+    return { ok: true, filePath: running.sessionFile, cwd };
+  }
+
+  const filePath = await resolveSessionPath(id);
   if (!filePath) return { ok: false, status: 404 };
 
   const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? "";

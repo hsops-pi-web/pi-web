@@ -104,6 +104,12 @@ export class AgentSessionWrapper {
 
   constructor(public readonly inner: AgentSessionLike) {}
 
+  // The cwd this session was created/opened with. Set by startRpcSession from
+  // the value the caller already validated. Trusted for ownership checks on a
+  // running session, because the on-disk header's cwd is briefly wrong during
+  // the first turn (pi writes process.cwd() before the real cwd settles).
+  cwd: string = "";
+
   get sessionId(): string {
     return this.inner.sessionId;
   }
@@ -421,6 +427,7 @@ export async function startRpcSession(
     }
 
     const wrapper = new AgentSessionWrapper(inner);
+    wrapper.cwd = cwd;
     wrapper.start();
 
     const realSessionId = inner.sessionId as string;
