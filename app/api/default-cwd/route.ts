@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
 import { mkdirSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { getSessionUser } from "@/lib/auth/session";
+import { getUserRoot } from "@/lib/auth/paths";
 
-// POST /api/default-cwd
-// Creates ~/pi-cwd-<YYYYMMDD> if it doesn't exist and returns the path.
-export async function POST() {
+export async function POST(req: Request) {
   try {
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const dir = join(homedir(), `pi-cwd-${date}`);
+    const username = getSessionUser(req);
+    if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+    const dir = getUserRoot(username);
     mkdirSync(dir, { recursive: true });
     return NextResponse.json({ cwd: dir });
   } catch (error) {

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { startRpcSession } from "@/lib/rpc-manager";
+import { getSessionUser } from "@/lib/auth/session";
+import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
 
 function expandHomePath(path: string): string {
   if (path === "~") return homedir();
@@ -14,27 +16,28 @@ function expandHomePath(path: string): string {
 // Returns { sessionId, data } where sessionId is pi's real session id.
 export async function POST(req: Request) {
   try {
+    const username = getSessionUser(req);
+    if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+
     const body = await req.json() as { cwd?: string; [key: string]: unknown };
     const { cwd: rawCwd, ...command } = body;
 
-    if (!rawCwd || typeof rawCwd !== "string") {
-      return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+    const cwd = rawCwd && typeof rawCwd === "string" ? expandHomePath(rawCwd) : getUserRoot(username);
+    // 已存在：realpath 解析 target 本身；不存在：解析父目录（允许在用户根内新建）。
+    // 两种情形都必须落在用户根内，否则拒绝。防 symlink 子路径逃逸。
+    const ok = existsSync(cwd)
+      ? resolveExistingAndCheck(cwd, username)
+      : resolveParentAndCheck(cwd, username);
+    if (!ok) {
+      return NextResponse.json({ error: "cwd 必须在你的用户目录内" }, { status: 400 });
     }
-    const cwd = expandHomePath(rawCwd);
-    if (!existsSync(cwd)) {
-      return NextResponse.json({ error: `Directory does not exist: ${rawCwd}` }, { status: 400 });
-    }
+    mkdirSync(cwd, { recursive: true });
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
     const { provider, modelId, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: string; [key: string]: unknown };
 
     const tempKey = `__new__${Date.now()}`;
     const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
-
-    // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)
-    // in sync so the new cwd is immediately readable via /api/files. Without this,
-    // a file request under a brand-new cwd would 403 for up to the cache TTL.
-    globalThis.__piAllowedRootsCache?.roots.add(cwd);
 
     // Apply pre-selected model before sending the prompt
     if (provider && modelId) {
