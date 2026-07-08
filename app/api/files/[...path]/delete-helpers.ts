@@ -1,5 +1,5 @@
 import path from "path";
-import { getUserRoot } from "../../../../lib/auth/paths.ts";
+import { getUserRoot } from "../../../../lib/auth/paths";
 
 export function isUserRootItself(target: string, username: string): boolean {
   return path.resolve(target) === getUserRoot(username);

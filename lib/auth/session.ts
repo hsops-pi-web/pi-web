@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { getDb } from "./db.ts";
+import { getDb } from "./db";
 
 export const SESSION_COOKIE = "pi_auth";
 export const SESSION_MAX_AGE_SEC = 604800; // 7 天
