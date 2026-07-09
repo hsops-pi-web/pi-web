@@ -74,14 +74,38 @@ super_admin 用户名常量集中在一处（如 `lib/auth/roles.ts` 的 `SUPER_
   - `GET /api/admin/files/[username]/[...path]` — 该用户目录内文件树/内容（只读，realpath 校验仍限该用户目录，防逃逸）。
   这些通道内部把"允许根"设为 `~/pi-users/<目标用户>`，与普通用户通道隔离，仅 requireAdmin 可达。
 
+## 5.1 普通用户配置 API 边界（收紧）
+
+普通 user 不仅前端隐藏 Models/Skills 入口，配置类 API 也在后端拒绝（返 403），
+不依赖前端隐藏。逐个明确：
+
+| API | 方法 | 普通 user | admin/super_admin |
+|---|---|---|---|
+| `/api/models` | GET | ✅ 允许（切换模型需读模型列表，只读）| ✅ |
+| `/api/models-config` | GET / PUT | ❌ 403（读写模型池均属管理）| ✅ |
+| `/api/models-config/test` | POST | ❌ 403 | ✅ |
+| `/api/skills` | GET / PATCH | ❌ 403 | ✅ |
+| `/api/skills/search` `/install` | POST | ❌ 403 | ✅ |
+
+- 实现：上述 admin-only 路由入口从 `getSessionUser` 换成 `requireAdmin`。
+- 普通用户切换模型不受影响——切换走 agent 命令通道（`/api/agent/new` 带 provider/modelId
+  → `set_model`），不经 `/api/models-config`；`/api/models` GET 保留供读取可选模型列表。
+- 既有遗留（本次不改，仅标记待核查）：`/api/auth/login/[provider]`、
+  `/api/auth/logout/[provider]` 当前无 `getSessionUser`，属第三方 provider 登录流程，
+  与本需求无关，后续单独核查是否需要加固。
+
 ## 6. 前端
 
 ### 后台页 `app/admin/page.tsx`（新增，独立路由）
 - 进入前置校验：middleware 放行到页面后，页面首个请求 `/api/admin/users`；非 admin 返 403 → 跳 `/`。
 - 布局：左侧用户列表（用户名 + 角色徽章 + 禁用状态 + 创建时间）；右侧选中用户后
   分两个 tab —「文件」(只读文件树，复用 FileExplorer 只读模式) 与「对话」(会话列表 + 只读详情)。
-- 操作区：每个用户行/详情头有「禁用/启用」「删除」按钮（删除二次确认，提示连带删目录与对话）；
-  super_admin 额外显示「设为管理员/取消管理员」。
+- **本次范围只读查看**：管理员对目标用户文件/对话仅查看，不提供编辑/删除单个文件或对话的能力。
+  在他人目录内编辑文件、删除单条对话/文件等操作**作为未来预留功能**，本次不实现；
+  后端 admin 文件/会话通道本次只暴露 GET（读），预留 DELETE/PUT 待将来按需开启。
+- 操作区：每个用户行/详情头有「禁用/启用」「删除用户」按钮（删除二次确认，提示连带删目录与对话）；
+  super_admin 额外显示「设为管理员/取消管理员」。注意：这里的「删除」是删**整个用户**（连带其目录），
+  与上面"预留的删单个文件"是两件事。
 - super_admin(hsops) 行的破坏性按钮禁用置灰。
 
 ### 主界面角色区分 `components/AppShell.tsx`
