@@ -73,6 +73,10 @@ super_admin 用户名常量集中在一处（如 `lib/auth/roles.ts` 的 `SUPER_
   - `GET /api/admin/users/[username]/sessions/[id]` — 会话详情（只读）。
   - `GET /api/admin/files/[username]/[...path]` — 该用户目录内文件树/内容（只读，realpath 校验仍限该用户目录，防逃逸）。
   这些通道内部把"允许根"设为 `~/pi-users/<目标用户>`，与普通用户通道隔离，仅 requireAdmin 可达。
+- **super_admin 内容保护**：所有 `/api/admin/users/[username]/*` 与 `/api/admin/files/[username]/*`
+  在解析目标用户后，若目标为 super_admin 且请求者不是该 super_admin 本人，一律返 403。
+  即普通 admin 看不到 super_admin(hsops) 的文件与对话；hsops 仍可通过普通用户通道看自己的内容。
+  该保护与"删除/禁用/降级 super_admin 被拒"同源，集中在一处判断（`isSuperAdmin(目标)` → 拒绝）。
 
 ## 5.1 普通用户配置 API 边界（收紧）
 
@@ -90,6 +94,8 @@ super_admin 用户名常量集中在一处（如 `lib/auth/roles.ts` 的 `SUPER_
 - 实现：上述 admin-only 路由入口从 `getSessionUser` 换成 `requireAdmin`。
 - 普通用户切换模型不受影响——切换走 agent 命令通道（`/api/agent/new` 带 provider/modelId
   → `set_model`），不经 `/api/models-config`；`/api/models` GET 保留供读取可选模型列表。
+  注意：允许 `/api/models` 只读读取模型列表，不等于显示右下角的 Models 管理入口——
+  前者是切换模型所需的数据，后者是配置管理面板；普通用户有前者、无后者。
 - 既有遗留（本次不改，仅标记待核查）：`/api/auth/login/[provider]`、
   `/api/auth/logout/[provider]` 当前无 `getSessionUser`，属第三方 provider 登录流程，
   与本需求无关，后续单独核查是否需要加固。
@@ -130,7 +136,9 @@ super_admin 用户名常量集中在一处（如 `lib/auth/roles.ts` 的 `SUPER_
 
 - 所有 `/api/admin/*` 必过 requireAdmin/requireSuperAdmin，越权返 403。
 - 查看/删除他人目录仍用 realpathSync 校验限定在目标用户目录内，防 symlink 逃逸。
-- super_admin 硬保护贯穿所有写操作（改角色/禁用/删除前先判目标是否 super_admin）。
+- super_admin 硬保护贯穿所有写操作（改角色/禁用/删除前先判目标是否 super_admin）；
+  查看类操作同样保护——普通 admin 不能读取 super_admin 的文件与对话（返 403），
+  仅 super_admin 本人可经普通用户通道查看自己内容。
 - 删除为不可逆操作，前端二次确认，后端 fail-closed（解析失败即拒绝）。
 
 ## 10. 变更文件清单
