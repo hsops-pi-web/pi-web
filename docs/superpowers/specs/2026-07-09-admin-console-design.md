@@ -79,9 +79,11 @@ super_admin 用户名常量集中在一处（如 `lib/auth/roles.ts` 的 `SUPER_
 `canChangeRole(actorRole): boolean`（仅 super_admin true）。每个管理 API 先取目标用户当前 role，
 再调 `canManage`/`canChangeRole`，不满足返 403。禁止仅凭 requireAdmin 就放行破坏性操作。
 
-**原需求例外说明**：最初需求为"管理员可查看每个用户"。本设计增加一条例外——普通 admin 不得查看
-super_admin(hsops) 的文件与对话。验收口径据此调整为："管理员可查看所有权限不高于自己的用户
-（super_admin 可看全部；普通 admin 可看所有 user 与 admin，但看不到 super_admin）"。
+**原需求例外说明（已确认的需求变更）**：最初需求为"管理员可查看每个用户"（§1）。该表述提出时
+尚无 admin/super_admin 分层。引入分层后，若低权限 admin 能读最高权限 super_admin(hsops) 的私有
+文件与对话即构成越权，故正式修订为例外——普通 admin 不得查看 super_admin 的文件与对话。
+验收口径据此确定为："管理员可查看所有权限不高于自己的用户（super_admin 可看全部；普通 admin
+可看所有 user 与 admin，但看不到 super_admin）"。此为经确认的需求收敛，非实现妥协。
 
 ## 4.2 禁用用户的登录与校验强化（对齐"禁用即不可登录"）
 
@@ -105,7 +107,7 @@ super_admin(hsops) 的文件与对话。验收口径据此调整为："管理员
 - `DELETE /api/admin/users/[username]` — 彻底删。requireAdmin + `canManage(actor,target)`；
   目标为 admin 时仅 super_admin 可删，目标为 super_admin 一律拒。
   删除按 §5.2 序列执行（先终止运行中 AgentSession，再删目录/jsonl/用户行）。
-- **查看目标用户内容**：管理员查看走带 `?asUser=<username>` 的受控通道：
+- **查看目标用户内容**：管理员查看走以目标用户名为**路径参数**的受控通道（统一用路径参数，不用 query）：
   - `GET /api/admin/users/[username]/sessions` — 该用户的会话列表（cwd 属于其目录）。
   - `GET /api/admin/users/[username]/sessions/[id]` — 会话详情（只读）。
   - `GET /api/admin/files/[username]/[...path]` — 该用户目录内文件树/内容（只读，realpath 校验仍限该用户目录，防逃逸）。
@@ -118,16 +120,22 @@ super_admin(hsops) 的文件与对话。验收口径据此调整为："管理员
 ## 5.2 删除用户序列（顺序敏感，fail-closed）
 
 AgentSession 存在全局注册表（`lib/rpc-manager.ts` 的 `AgentSessionWrapper`，含 `cwd`、
-`abort()`、`destroy()`），正在运行的会话在用户删除后可能继续向其目录写文件。删除必须按序：
+`send({type:"abort"})`、`destroy()`），正在运行的会话在用户删除后可能继续向其目录写文件。
+另外：会话 jsonl 的归属判断依赖 `resolveExistingAndCheck`（`lib/auth/paths.ts`），它对 cwd 做
+`realpathSync`，**目录一旦删除就解析失败**，因此待删 jsonl 集合必须在删目录**之前**先扫描确定。
+删除按序：
 
-1. **置禁用 + 撤登录**：`disabled=1` 且 `DELETE FROM sessions WHERE username=?`（用户立即无法登录/操作）。
-2. **终止运行中 AgentSession**：遍历 rpc-manager 注册表，对 `cwd` 落在 `~/pi-users/<user>` 内的
-   每个 wrapper 调 `abort()` 后 `destroy()`，并从注册表移除，确保无进程再写该目录。
-3. **删工作目录**：`fs.rmSync(~/pi-users/<user>, {recursive:true, force:true})`。
-4. **删对话 jsonl**：删 `~/.pi/agent/sessions` 下 cwd 落在该目录的 jsonl（复用会话 cwd 归属判断）。
+1. **先扫描确定待删 jsonl 集合**：趁工作目录还在，遍历 `~/.pi/agent/sessions` 下 jsonl，
+   用现有 cwd 归属判断算出 cwd 落在 `~/pi-users/<user>` 内的 jsonl 路径列表，先存下来。
+2. **置禁用 + 撤登录**：`disabled=1` 且 `DELETE FROM sessions WHERE username=?`。
+3. **终止运行中 AgentSession**：遍历 rpc-manager 注册表，对 `cwd` 落在 `~/pi-users/<user>` 内的
+   每个 wrapper 调 `await send({type:"abort"})` 后 `destroy()`，并从注册表移除
+   （wrapper 无公开 `abort()`，用 `send` 命令；见 §6 组件契约后的实现注记）。
+4. **删工作目录 + 删已确定的 jsonl**：`fs.rmSync(~/pi-users/<user>, {recursive:true, force:true})`，
+   再删第 1 步存下的 jsonl 集合（不再依赖 realpath，路径已固定）。
 5. **删用户行**：`DELETE FROM users WHERE username=?`。
 
-**fail-closed**：任一步（尤其 2/3）失败则中止，保留已置 `disabled=1` 的 users 行并返回错误，
+**fail-closed**：任一步（尤其 3/4）失败则中止，保留已置 `disabled=1` 的 users 行并返回错误，
 使管理员可重试删除；不允许留下"用户行已删但目录/进程还在"的半删状态。第 5 步放最后，
 保证清理未完成时用户记录仍在、可重入。
 
@@ -186,13 +194,16 @@ AgentSession 存在全局注册表（`lib/rpc-manager.ts` 的 `AgentSessionWrapp
 「删除」按钮；`components/FileViewer.tsx` 也把 read/watch 硬编码到 `/api/files/...`。管理员用现有组件
 无法读取目标用户目录，也会误显示写操作按钮。因此复用需先参数化：
 
-- **FileExplorer**：新增 `readOnly?: boolean` 与可配置的基址（如 `apiBase`/`buildUrl`）。
-  admin 模式传 `readOnly=true` + 基址 `/api/admin/files/<目标用户>`；`readOnly` 时不渲染删除按钮、
-  不启用 mention、不触发写操作。
-- **FileViewer**：同样支持可配置读取 URL（read 与 watch 都走 admin 基址），或新增专用只读 viewer；
-  admin 模式关闭文件监听（watch EventSource）等副作用，仅做只读渲染。
+- **统一寻址** `buildFileUrl(path, type)`：现有 read/watch 硬编码 `/api/files/...`，且下载走
+  `lib/file-paths` 的 `getFileDownloadUrl`（同样固定 `/api/files`）。复用前把四类地址收敛到一个
+  可注入基址的构造器，覆盖 `list` / `read` / `download` / `watch`。admin 只读模式传入 admin 基址
+  `/api/admin/files/<目标用户>`，其中 `watch` 不启用（只读不监听）。
+- **FileExplorer**：新增 `readOnly?: boolean`，用注入的 `buildFileUrl` 取代硬编码。
+  `readOnly` 时不渲染删除按钮、不启用 mention、不触发写操作。
+- **FileViewer**：read/download 用注入的 `buildFileUrl`；admin 只读模式关闭 watch EventSource
+  等副作用，仅只读渲染（或新增专用只读 viewer）。
 - admin 模式统一关闭：删除、mention、文件监听（watch）及任何写操作入口。
-- 普通用户路径行为完全不变（默认 `readOnly=false` + `/api/files` 基址）。
+- 普通用户路径行为完全不变（默认基址 `/api/files`，`readOnly=false`）。
 
 ## 7. 中间件
 
@@ -244,6 +255,8 @@ AgentSession 存在全局注册表（`lib/rpc-manager.ts` 的 `AgentSessionWrapp
   `app/api/auth/api-key/[provider]/route.ts`、`app/api/auth/login/[provider]/route.ts`、
   `app/api/auth/logout/[provider]/route.ts`（入口改 `requireAdmin`；后两者当前无鉴权）。
 - `components/AppShell.tsx`（按 role 隐藏 Models/Skills + 后台入口）。
-- `components/FileExplorer.tsx`（`readOnly` + 可配置基址，只读时隐藏删除/mention/watch）。
-- `components/FileViewer.tsx`（可配置读取/watch URL，admin 只读模式关闭 watch 等写副作用）。
-- `lib/rpc-manager.ts`（暴露"按 cwd 前缀终止并移除 AgentSession"的辅助，供删除用户 §5.2 调用）。
+- `components/FileExplorer.tsx`（`readOnly` + 注入 `buildFileUrl`，只读时隐藏删除/mention/watch）。
+- `components/FileViewer.tsx`（read/download/watch 用注入 `buildFileUrl`，admin 只读关 watch）。
+- `lib/file-paths.ts`（`getFileDownloadUrl` 等改为可注入基址，或并入 `buildFileUrl`）。
+- `lib/rpc-manager.ts`（暴露"按 cwd 前缀终止并移除 AgentSession"的辅助；wrapper 无公开 `abort()`，
+  辅助内部对每个匹配 wrapper 执行 `await send({type:"abort"})` 后 `destroy()`）。
