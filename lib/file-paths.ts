@@ -13,8 +13,18 @@ export function encodeFilePathForApi(filePath: string): string {
     .join("/");
 }
 
-export function getFileDownloadUrl(filePath: string): string {
-  return `/api/files/${encodeFilePathForApi(filePath)}?type=download`;
+export type FileUrlType = "list" | "read" | "download" | "watch";
+
+export function buildFileUrl(
+  filePath: string,
+  type: FileUrlType,
+  base = "/api/files"
+): string {
+  return `${base}/${encodeFilePathForApi(filePath)}?type=${type}`;
+}
+
+export function getFileDownloadUrl(filePath: string, base = "/api/files"): string {
+  return buildFileUrl(filePath, "download", base);
 }
 
 export function getFileName(filePath: string): string {

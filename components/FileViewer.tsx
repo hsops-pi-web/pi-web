@@ -7,12 +7,19 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "@/hooks/useTheme";
-import { encodeFilePathForApi, getFileDownloadUrl, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import {
+  buildFileUrl,
+  getFileDownloadUrl,
+  getFileName,
+  getRelativeFilePath,
+} from "@/lib/file-paths";
 import { authFetch } from "@/lib/client-auth-fetch";
 
 interface Props {
   filePath: string;
   cwd?: string;
+  readOnly?: boolean;
+  urlBase?: string;
 }
 
 interface FileData {
@@ -54,10 +61,16 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function DownloadButton({ filePath }: { filePath: string }) {
+function DownloadButton({
+  filePath,
+  urlBase,
+}: {
+  filePath: string;
+  urlBase?: string;
+}) {
   return (
     <a
-      href={getFileDownloadUrl(filePath)}
+      href={getFileDownloadUrl(filePath, urlBase)}
       title="Download file"
       style={{
         display: "flex",
@@ -306,7 +319,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
   );
 }
 
-function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
+function ImageViewer({ filePath, cwd, readOnly, urlBase }: Props) {
   const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
@@ -328,8 +341,9 @@ function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       esRef.current = null;
     }
 
-    const encoded = encodeFilePathForApi(filePath);
-    const es = new EventSource(`/api/files/${encoded}?type=watch`);
+    if (readOnly) return;
+
+    const es = new EventSource(buildFileUrl(filePath, "watch", urlBase));
     esRef.current = es;
 
     es.addEventListener("connected", () => setWatching(true));
@@ -350,10 +364,9 @@ function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       es.close();
       esRef.current = null;
     };
-  }, [filePath]);
+  }, [filePath, readOnly, urlBase]);
 
-  const encoded = encodeFilePathForApi(filePath);
-  const src = `/api/files/${encoded}?type=read${bust ? `&v=${bust}` : ""}`;
+  const src = `${buildFileUrl(filePath, "read", urlBase)}${bust ? `&v=${bust}` : ""}`;
 
   const formatSizeStr = size != null ? formatSize(size) : null;
 
@@ -378,7 +391,7 @@ function ImageViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
         <span style={{ marginLeft: "auto" }}>{ext || "image"}</span>
         {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
         {formatSizeStr && <span>{formatSizeStr}</span>}
-        <DownloadButton filePath={filePath} />
+        <DownloadButton filePath={filePath} urlBase={urlBase} />
         <span
           title={watching ? "Live sync active" : "Not watching"}
           style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
@@ -444,7 +457,7 @@ function formatDuration(seconds: number): string {
   return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
+function AudioViewer({ filePath, cwd, readOnly, urlBase }: Props) {
   const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
@@ -466,8 +479,9 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       esRef.current = null;
     }
 
-    const encoded = encodeFilePathForApi(filePath);
-    const es = new EventSource(`/api/files/${encoded}?type=watch`);
+    if (readOnly) return;
+
+    const es = new EventSource(buildFileUrl(filePath, "watch", urlBase));
     esRef.current = es;
 
     es.addEventListener("connected", () => setWatching(true));
@@ -490,10 +504,9 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
       es.close();
       esRef.current = null;
     };
-  }, [filePath]);
+  }, [filePath, readOnly, urlBase]);
 
-  const encoded = encodeFilePathForApi(filePath);
-  const src = `/api/files/${encoded}?type=read${bust ? `&v=${bust}` : ""}`;
+  const src = `${buildFileUrl(filePath, "read", urlBase)}${bust ? `&v=${bust}` : ""}`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -516,7 +529,7 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
         <span style={{ marginLeft: "auto" }}>{ext || "audio"}</span>
         {duration != null && <span>{formatDuration(duration)}</span>}
         {size != null && <span>{formatSize(size)}</span>}
-        <DownloadButton filePath={filePath} />
+        <DownloadButton filePath={filePath} urlBase={urlBase} />
         <span
           title={watching ? "Live sync active" : "Not watching"}
           style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
@@ -565,20 +578,20 @@ function AudioViewer({ filePath, cwd }: { filePath: string; cwd?: string }) {
   );
 }
 
-export function FileViewer({ filePath, cwd }: Props) {
+export function FileViewer({ filePath, cwd, readOnly = false, urlBase }: Props) {
   if (isImagePath(filePath)) {
-    return <ImageViewer filePath={filePath} cwd={cwd} />;
+    return <ImageViewer filePath={filePath} cwd={cwd} readOnly={readOnly} urlBase={urlBase} />;
   }
   if (isAudioPath(filePath)) {
-    return <AudioViewer filePath={filePath} cwd={cwd} />;
+    return <AudioViewer filePath={filePath} cwd={cwd} readOnly={readOnly} urlBase={urlBase} />;
   }
   if (isBinaryDocPath(filePath)) {
-    return <DownloadOnlyViewer filePath={filePath} cwd={cwd} />;
+    return <DownloadOnlyViewer filePath={filePath} cwd={cwd} readOnly={readOnly} urlBase={urlBase} />;
   }
-  return <TextFileViewer filePath={filePath} cwd={cwd} />;
+  return <TextFileViewer filePath={filePath} cwd={cwd} readOnly={readOnly} urlBase={urlBase} />;
 }
 
-function DownloadOnlyViewer({ filePath, cwd }: Props) {
+function DownloadOnlyViewer({ filePath, cwd, urlBase }: Props) {
   const name = getFileName(filePath);
   const ext = name.toLowerCase().split(".").pop() ?? "file";
   return (
@@ -600,7 +613,7 @@ function DownloadOnlyViewer({ filePath, cwd }: Props) {
           {getRelativeFilePath(filePath, cwd)}
         </span>
         <span style={{ marginLeft: "auto" }}>{ext}</span>
-        <DownloadButton filePath={filePath} />
+        <DownloadButton filePath={filePath} urlBase={urlBase} />
       </div>
       <div
         style={{
@@ -616,7 +629,7 @@ function DownloadOnlyViewer({ filePath, cwd }: Props) {
           <div style={{ fontSize: 14, color: "var(--text)", marginBottom: 8 }}>{name}</div>
           <div style={{ marginBottom: 14 }}>This file type is not previewed in the browser.</div>
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <DownloadButton filePath={filePath} />
+            <DownloadButton filePath={filePath} urlBase={urlBase} />
           </div>
         </div>
       </div>
@@ -624,7 +637,7 @@ function DownloadOnlyViewer({ filePath, cwd }: Props) {
   );
 }
 
-function TextFileViewer({ filePath, cwd }: Props) {
+function TextFileViewer({ filePath, cwd, readOnly, urlBase }: Props) {
   const { isDark } = useTheme();
   const [data, setData] = useState<FileData | null>(null);
   const [prevContent, setPrevContent] = useState<string | null>(null);
@@ -638,8 +651,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
   const esRef = useRef<EventSource | null>(null);
 
   const fetchContent = useCallback((filePath: string, isRefresh = false) => {
-    const encoded = encodeFilePathForApi(filePath);
-    return authFetch(`/api/files/${encoded}?type=read`)
+    return authFetch(buildFileUrl(filePath, "read", urlBase))
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
         if (d.error) {
@@ -661,7 +673,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
         setError(String(e));
         return null;
       });
-  }, []);
+  }, [urlBase]);
 
   // Initial load + SSE watch setup
   useEffect(() => {
@@ -684,9 +696,9 @@ function TextFileViewer({ filePath, cwd }: Props) {
       if (d?.language === "markdown") setPreviewMode(true);
     }).finally(() => setLoading(false));
 
-    // Set up SSE watch
-    const encoded = encodeFilePathForApi(filePath);
-    const es = new EventSource(`/api/files/${encoded}?type=watch`);
+    if (readOnly) return;
+
+    const es = new EventSource(buildFileUrl(filePath, "watch", urlBase));
     esRef.current = es;
 
     es.addEventListener("connected", () => {
@@ -710,7 +722,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
       es.close();
       esRef.current = null;
     };
-  }, [filePath, fetchContent]);
+  }, [filePath, fetchContent, readOnly, urlBase]);
 
   if (loading) {
     return (
@@ -757,7 +769,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
         <span style={{ marginLeft: "auto" }}>{data.language}</span>
         {viewMode === "source" && <span>{lines.length} lines</span>}
         <span>{formatSize(data.size)}</span>
-        <DownloadButton filePath={filePath} />
+        <DownloadButton filePath={filePath} urlBase={urlBase} />
 
         {/* Live watch indicator */}
         <span
