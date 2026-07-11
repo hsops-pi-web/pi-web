@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
-import { startRpcSession } from "@/lib/rpc-manager";
+import { startRpcSession, withStartGuard } from "@/lib/rpc-manager";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
 
@@ -31,27 +31,22 @@ export async function POST(req: Request) {
     if (!ok) {
       return NextResponse.json({ error: "cwd 必须在你的用户目录内" }, { status: 400 });
     }
-    mkdirSync(cwd, { recursive: true });
-
-    // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
     const { provider, modelId, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: string; [key: string]: unknown };
+    const payload = await withStartGuard(cwd, async () => {
+      mkdirSync(cwd, { recursive: true });
+      const tempKey = `__new__${Date.now()}`;
+      const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
+      if (provider && modelId) {
+        await session.send({ type: "set_model", provider, modelId });
+      }
+      if (thinkingLevel) {
+        await session.send({ type: "set_thinking_level", level: thinkingLevel });
+      }
+      const result = await session.send(promptCommand);
+      return { success: true, sessionId: realSessionId, data: result };
+    });
 
-    const tempKey = `__new__${Date.now()}`;
-    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
-
-    // Apply pre-selected model before sending the prompt
-    if (provider && modelId) {
-      await session.send({ type: "set_model", provider, modelId });
-    }
-
-    // Apply pre-selected thinking level before sending the prompt
-    if (thinkingLevel) {
-      await session.send({ type: "set_thinking_level", level: thinkingLevel });
-    }
-
-    const result = await session.send(promptCommand);
-
-    return NextResponse.json({ success: true, sessionId: realSessionId, data: result });
+    return NextResponse.json(payload);
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
