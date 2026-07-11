@@ -4,6 +4,7 @@ import { isValidUsername, isValidPassword } from "@/lib/auth/validate";
 import { hashPassword } from "@/lib/auth/password";
 import { getUserRoot } from "@/lib/auth/paths";
 import { getDb } from "@/lib/auth/db";
+import { SUPER_ADMIN } from "@/lib/auth/roles";
 
 export async function POST(req: Request) {
   const { keyword, username, password } = await req.json() as {
@@ -24,8 +25,9 @@ export async function POST(req: Request) {
   if (exists) {
     return NextResponse.json({ error: "用户名已存在" }, { status: 409 });
   }
-  db.prepare("INSERT INTO users(username,password_hash,created_at) VALUES(?,?,?)")
-    .run(username, hashPassword(password), new Date().toISOString());
+  const role = username === SUPER_ADMIN ? "super_admin" : "user";
+  db.prepare("INSERT INTO users(username,password_hash,created_at,role) VALUES(?,?,?,?)")
+    .run(username, hashPassword(password), new Date().toISOString(), role);
   mkdirSync(getUserRoot(username), { recursive: true });
   return NextResponse.json({ ok: true });
 }

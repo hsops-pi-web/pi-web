@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth/session";
+import { getSessionUserWithRole } from "@/lib/auth/session";
 
 export async function GET(req: Request) {
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
-  return NextResponse.json({ username });
+  const session = getSessionUserWithRole(req);
+  if (!session) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  return NextResponse.json({ username: session.username, role: session.role });
 }
