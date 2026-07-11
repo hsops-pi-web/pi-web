@@ -66,12 +66,20 @@ export function AppShell() {
 
   // Auth user — fetch on mount, redirect to /login if not authenticated
   const [authUser, setAuthUser] = useState<string | null>(null);
+  const [authRole, setAuthRole] = useState<"user" | "admin" | "super_admin" | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.username) setAuthUser(d.username); else window.location.href = "/login"; })
+      .then((d) => {
+        if (d?.username) {
+          setAuthUser(d.username);
+          if (d.role) setAuthRole(d.role);
+        } else {
+          window.location.href = "/login";
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -248,6 +256,7 @@ export function AppShell() {
   const showPlaceholder = initialSessionRestored && !showChat;
 
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
+  const isAdminUser = authRole === "admin" || authRole === "super_admin";
 
   const sidebarContent = (
     <>
@@ -265,7 +274,7 @@ export function AppShell() {
         explorerRefreshKey={explorerRefreshKey}
         onAtMention={handleAtMention}
       />
-      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
+      {isAdminUser && <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           {
             label: "Models",
@@ -313,7 +322,7 @@ export function AppShell() {
             {label}
           </button>
         ))}
-      </div>
+      </div>}
     </>
   );
 
@@ -559,6 +568,21 @@ export function AppShell() {
                   <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
                     已登录：{authUser}
                   </div>
+                  {isAdminUser && (
+                    <button
+                      onClick={() => { window.location.href = "/admin"; }}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8, width: "100%",
+                        padding: "8px 10px", fontSize: 12, cursor: "pointer",
+                        background: "none", border: "none", color: "var(--text)",
+                        borderRadius: 5, textAlign: "left",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      管理后台
+                    </button>
+                  )}
                   <button
                     onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
                     style={{
