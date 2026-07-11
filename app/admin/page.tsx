@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { FileExplorer } from "@/components/FileExplorer";
 import { FileViewer } from "@/components/FileViewer";
 import { MessageView } from "@/components/MessageView";
@@ -239,9 +240,9 @@ export default function AdminPage() {
           }}
         >
           <strong style={{ fontSize: 14 }}>用户管理</strong>
-          <a href="/" style={{ color: "var(--accent)", fontSize: 12, textDecoration: "none" }}>
+          <Link href="/" style={{ color: "var(--accent)", fontSize: 12, textDecoration: "none" }}>
             返回工作台
-          </a>
+          </Link>
         </header>
 
         <div style={{ flex: 1, overflowY: "auto" }}>

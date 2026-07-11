@@ -5,7 +5,6 @@ import { mkdirSync } from "fs";
 import { SUPER_ADMIN } from "./roles";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __piAuthDb: Database.Database | undefined;
 }
 
