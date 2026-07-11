@@ -346,3 +346,22 @@ jsonl 未删净时目录必然还在，故重试能按原路径重新枚举；�
 - `app/api/agent/[id]/route.ts`（POST 的已有/新建 wrapper 选择与 `send` 整段用 `withCwdOperationGuard` 包住，阻止已鉴权旧请求在删除窗口内继续写）。
 - `lib/rpc-manager.ts`（import 新建 `delete-lock.ts` 的锁工厂、`createDeleteWindowAbortError` 与 `assertSessionCommandAllowed`，并薄包装导出删除锁 `markRootDeleting`/`unmarkRootDeleting`/`waitForStartsUnderRoot`/`withStartGuard`/`withCwdOperationGuard`——先 `canon` 再委托纯模块；`canon` 仅 ENOENT 降级、其他错误传播；保留依赖注册表的 `abortSessionsUnderCwd`（canonical 比较）；`startRpcSession` 在 existing/inflight fast path **之前** canonical 化并检查删除状态、透传 canonical cwd（jsonl header 存 canonical）、注册前二次检查清理已建 inner（`destroy`+`abort`+`dispose?`+删 jsonl，**按清理成败分流并调用共享 helper**：仅失败才 `deleteWindowCleanup` fail-closed）；`AgentSessionWrapper.send` 通过共享命令判定拒绝已销毁 wrapper 与删除窗口内非 `abort` 命令，内部删除用 `send({type:"abort"})` 仍放行）。
 - `lib/pi-types.ts`（`AgentSessionLike` 补 `dispose?(): void;`，供二次检查 `inner.dispose?.()` 更彻底清理内部监听/扩展资源）。
+
+## 11. 实现记录（2026-07-11）
+
+本设计已在 `feat/admin-console` 分支完成实现和隔离环境验收：
+
+- 已实现 `user`、`admin`、`super_admin` 三级角色，`hsops` 注册或迁移时自动成为 `super_admin`。
+- 已实现 `/admin` 管理后台，支持查看用户、只读查看目标用户文件和对话、禁用/启用、删除用户，以及由
+  `super_admin` 执行 `user` 与 `admin` 间的角色调整。
+- Models、Skills 及全局 provider/API key 配置接口已收紧为 admin-only；普通用户主界面不显示 Models、
+  Skills 或管理后台入口，但仍可读取 `/api/models` 完成模型切换。
+- 禁用会立即撤销目标用户的登录 session，并阻止旧 cookie 和重新登录；用户彻底删除会清理工作目录、
+  运行中的 AgentSession 和全部归属 jsonl。
+- 删除链路已包含 canonical cwd 归属、删除锁与 in-flight operation guard、cwd 已删除历史会话归属、
+  用户根软链拒删和 fail-closed 重试语义。
+- 目标用户内容本次保持只读。编辑或删除他人的单个文件、单条对话仍为后续预留能力，未在本次实现。
+
+验收在 `/home/hsops/.pi-admin-dev-home` 与 8133 端口完成，覆盖普通用户 API 403 矩阵、禁用即时生效、
+admin/super_admin 权限矩阵、文件软链逃逸、图片二进制读取、连带删除、删除失败 fail-closed，以及桌面和
+390px 移动视口。开发和验收期间未构建、重启或修改 8000 端口的生产服务。

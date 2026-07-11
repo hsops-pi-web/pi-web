@@ -12,6 +12,13 @@ Lint: `node node_modules/next/dist/bin/next lint`
 
 Production publish after merging to `main`: run `npm run build` first, then restart `pi-web.service`. The systemd service uses `next start`, so a restart alone keeps serving the old `.next/` build.
 
+## Admin Console And Roles
+
+- Roles are `user`, `admin`, and `super_admin`; username `hsops` is always bootstrapped as `super_admin`.
+- `/admin` is available only to `admin` and `super_admin`. It manages users and provides read-only access to their files and conversations.
+- Regular users do not see Models, Skills, or the admin-console entry. Configuration and provider credential APIs enforce the same boundary server-side.
+- Disabling a user revokes active login sessions. Deleting a user also removes owned session jsonl files and the user's work directory through the fail-closed delete lock flow.
+
 ---
 
 ## Architecture
