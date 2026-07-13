@@ -10,7 +10,7 @@ Typecheck: `node_modules/.bin/tsc --noEmit`
 Lint: `node node_modules/next/dist/bin/next lint`  
 **Never run `next build` during dev** — pollutes `.next/` and breaks `npm run dev`.
 
-Production publish after merging to `main`: run `npm run build` first, then restart `pi-web.service`. The systemd service uses `next start`, so a restart alone keeps serving the old `.next/` build.
+Production publish after merging to `main`: back up `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent`, stop `pi-web-auth.service`, run `npm run build`, then start `pi-web-auth.service`. The user-level systemd service runs `next start -p 8000` from `/home/hsops/pi-web-auth`, so a restart alone keeps serving the old `.next/` build.
 
 ## Admin Console And Roles
 

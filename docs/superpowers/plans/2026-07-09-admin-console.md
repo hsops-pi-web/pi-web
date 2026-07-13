@@ -3146,6 +3146,7 @@ git switch main
 git log --oneline -1                # 确认 main HEAD 已含本功能合并提交（Step 3 已合并，含代码+文档）
 git status --porcelain              # 应为空（生产工作树干净，绝不在此编辑/提交）
 npm ci 2>/dev/null || npm install   # 依赖对齐（如分支引入新依赖）
+systemctl --user stop pi-web-auth   # 避免 next start 在构建期间读取被替换的 .next
 npm run build                       # 写生产工作树的 .next
 ```
 Expected: 当前目录 `/home/hsops/pi-web-auth`、分支 `main` 且含功能提交（代码+文档）；构建成功、无类型错误，`.next` 更新在生产工作树内。（若 Step 3 是建 PR 而非直接合并，须等 PR 合并进 main 后再执行本步。）
@@ -3155,7 +3156,7 @@ Expected: 当前目录 `/home/hsops/pi-web-auth`、分支 `main` 且含功能提
 Run（确认后，仍在 `/home/hsops/pi-web-auth`）：
 ```bash
 cd /home/hsops/pi-web-auth
-systemctl --user restart pi-web-auth
+systemctl --user start pi-web-auth
 sleep 3
 curl -s -o /dev/null -w "home=%{http_code}\n" http://localhost:8000/login
 systemctl --user status pi-web-auth --no-pager | head -5
