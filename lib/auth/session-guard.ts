@@ -5,7 +5,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { resolveExistingAndCheck } from "@/lib/auth/paths";
 
 export type SessionGuardResult =
-  | { ok: true; filePath: string; cwd: string }
+  | { ok: true; username: string; filePath: string; cwd: string }
   | { ok: false; status: 401 | 404 };
 
 // 归属校验失败时的统一提示：401 表示未登录，其余按“未找到”处理，不泄露 session 是否存在。
@@ -34,7 +34,7 @@ export async function checkSessionOwnership(
     if (!cwd || !resolveExistingAndCheck(cwd, username)) {
       return { ok: false, status: 404 };
     }
-    return { ok: true, filePath: running.sessionFile, cwd };
+    return { ok: true, username, filePath: running.sessionFile, cwd };
   }
 
   const filePath = await resolveSessionPath(id);
@@ -44,5 +44,5 @@ export async function checkSessionOwnership(
   if (!cwd || !resolveExistingAndCheck(cwd, username)) {
     return { ok: false, status: 404 };
   }
-  return { ok: true, filePath, cwd };
+  return { ok: true, username, filePath, cwd };
 }

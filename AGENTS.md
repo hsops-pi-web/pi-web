@@ -12,6 +12,14 @@ Lint: `node node_modules/next/dist/bin/next lint`
 
 Production publish after merging to `main`: back up `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent`, stop `pi-web-auth.service`, run `npm run build`, then start `pi-web-auth.service`. The user-level systemd service runs `next start -p 8000` from `/home/hsops/pi-web-auth`, so a restart alone keeps serving the old `.next/` build.
 
+## Isolated Feature Development
+
+- Keep `/home/hsops/pi-web-auth` on `main` as the production worktree; do not develop in it while `pi-web-auth.service` serves port 8000.
+- Create each feature on a separate branch and linked worktree. Use a dedicated `HOME` so `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent` resolve inside the isolated environment.
+- Run development and acceptance on a non-8000 port, for example `HOME=/home/hsops/.pi-feature-dev-home npm run dev -- -p 8144`.
+- Do not run `next build` in a development worktree. Use the dev server for implementation and acceptance.
+- Release sequence: tests pass -> user acceptance -> stop production -> back up production data -> merge into `main` -> run `npm run build` in `/home/hsops/pi-web-auth` -> start `pi-web-auth.service` -> verify port 8000 and preserved data.
+
 ## Admin Console And Roles
 
 - Roles are `user`, `admin`, and `super_admin`; username `hsops` is always bootstrapped as `super_admin`.

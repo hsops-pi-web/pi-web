@@ -134,6 +134,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollToUserRef = useRef(false);
+  const newSessionModelWasSelectedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -398,6 +399,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             toolNames,
             ...(piImages?.length ? { images: piImages } : {}),
             ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
+            ...(newSessionModelWasSelectedRef.current ? { rememberModel: true } : {}),
             ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
           }),
         });
@@ -485,6 +487,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
     if (isNew) {
+      newSessionModelWasSelectedRef.current = true;
       setNewSessionModel({ provider, modelId });
       return;
     }
@@ -691,7 +694,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (d.thinkingLevelMaps) setModelThinkingLevelMaps(d.thinkingLevelMaps);
       if (d.modelList) {
         setModelList(d.modelList);
-        if (isNew && d.modelList.length > 0) {
+        if (isNew && d.modelList.length > 0 && !newSessionModelWasSelectedRef.current) {
           const def = d.defaultModel;
           const match = def && d.modelList.find((m) => m.id === def.modelId && m.provider === def.provider);
           const selected = match

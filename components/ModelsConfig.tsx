@@ -122,6 +122,17 @@ interface ModelsJson {
   providers?: Record<string, ProviderEntry>;
 }
 
+interface AvailableModel {
+  id: string;
+  name: string;
+  provider: string;
+}
+
+interface ModelRef {
+  provider: string;
+  modelId: string;
+}
+
 type ModelTestState =
   | { phase: "idle" }
   | { phase: "testing" }
@@ -135,6 +146,10 @@ type Selection =
   | { type: "apikey"; providerId: string };
 
 const API_OPTIONS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
+
+function modelRefKey(model: ModelRef): string {
+  return JSON.stringify([model.provider, model.modelId]);
+}
 
 // ── Form field helpers ────────────────────────────────────────────────────────
 
@@ -1236,6 +1251,11 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [globalDefaultModel, setGlobalDefaultModel] = useState<ModelRef | null>(null);
+  const [selectedDefaultKey, setSelectedDefaultKey] = useState("");
+  const [defaultSaving, setDefaultSaving] = useState(false);
+  const [defaultStatus, setDefaultStatus] = useState<string | null>(null);
 
   const loadOAuthProviders = useCallback(() => {
     authFetch("/api/auth/providers")
@@ -1251,6 +1271,31 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       .catch(() => {});
   }, []);
 
+  const loadModelDefaults = useCallback(async () => {
+    const res = await authFetch("/api/models");
+    const data = await res.json() as {
+      modelList?: AvailableModel[];
+      globalDefaultModel?: ModelRef | null;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+
+    const list = data.modelList ?? [];
+    const globalDefault = data.globalDefaultModel ?? null;
+    const globalKey = globalDefault ? modelRefKey(globalDefault) : "";
+    const selectedKey = list.some(
+      (model) => modelRefKey({ provider: model.provider, modelId: model.id }) === globalKey
+    )
+      ? globalKey
+      : list[0]
+        ? modelRefKey({ provider: list[0].provider, modelId: list[0].id })
+        : "";
+
+    setAvailableModels(list);
+    setGlobalDefaultModel(globalDefault);
+    setSelectedDefaultKey(selectedKey);
+  }, []);
+
   useEffect(() => {
     authFetch("/api/models-config")
       .then((r) => r.json())
@@ -1264,7 +1309,10 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       .finally(() => setLoading(false));
     loadOAuthProviders();
     loadApiKeyProviders();
-  }, [loadOAuthProviders, loadApiKeyProviders]);
+    loadModelDefaults().catch((error) => {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    });
+  }, [loadOAuthProviders, loadApiKeyProviders, loadModelDefaults]);
 
   const addCustomProvider = useCallback(() => {
     let finalName = "new-provider";
@@ -1351,13 +1399,46 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       });
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) setSaveError(d.error ?? `HTTP ${res.status}`);
-      else { setSavedOk(true); setTimeout(() => setSavedOk(false), 2000); }
+      else {
+        await loadModelDefaults();
+        setSavedOk(true);
+        setTimeout(() => setSavedOk(false), 2000);
+      }
     } catch (e) {
       setSaveError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [config]);
+  }, [config, loadModelDefaults]);
+
+  const handleSetGlobalDefault = useCallback(async () => {
+    if (!selectedDefaultKey || defaultSaving) return;
+    const [provider, modelId] = JSON.parse(selectedDefaultKey) as [string, string];
+    setDefaultSaving(true);
+    setDefaultStatus(null);
+    try {
+      const res = await authFetch("/api/models-config/default", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, modelId }),
+      });
+      const data = await res.json() as {
+        globalDefaultModel?: ModelRef;
+        error?: string;
+      };
+      if (!res.ok || !data.globalDefaultModel) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setGlobalDefaultModel(data.globalDefaultModel);
+      setSelectedDefaultKey(modelRefKey(data.globalDefaultModel));
+      setDefaultStatus("saved");
+      setTimeout(() => setDefaultStatus(null), 2000);
+    } catch (error) {
+      setDefaultStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDefaultSaving(false);
+    }
+  }, [defaultSaving, selectedDefaultKey]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -1418,6 +1499,51 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
             <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.pi/agent/models.json</code>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "2px 6px" }}>×</button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "9px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <label htmlFor="global-default-model" style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", flexShrink: 0 }}>
+            Global default
+          </label>
+          <select
+            id="global-default-model"
+            value={selectedDefaultKey}
+            onChange={(event) => {
+              setSelectedDefaultKey(event.target.value);
+              setDefaultStatus(null);
+            }}
+            disabled={availableModels.length === 0 || defaultSaving}
+            style={{ ...inputStyle, flex: "1 1 280px", minWidth: 0, width: "auto", height: 30 }}
+          >
+            {availableModels.length === 0 && <option value="">No available models</option>}
+            {availableModels.map((model) => {
+              const value = modelRefKey({ provider: model.provider, modelId: model.id });
+              return <option key={value} value={value}>{model.provider} / {model.name}</option>;
+            })}
+          </select>
+          <button
+            onClick={handleSetGlobalDefault}
+            disabled={!selectedDefaultKey || defaultSaving || selectedDefaultKey === (globalDefaultModel ? modelRefKey(globalDefaultModel) : "")}
+            style={{
+              height: 30,
+              padding: "0 11px",
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: 4,
+              color: "#fff",
+              cursor: !selectedDefaultKey || defaultSaving ? "not-allowed" : "pointer",
+              opacity: !selectedDefaultKey || defaultSaving || selectedDefaultKey === (globalDefaultModel ? modelRefKey(globalDefaultModel) : "") ? 0.55 : 1,
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            {defaultSaving ? "Saving..." : "Set global default"}
+          </button>
+          {defaultStatus && (
+            <span style={{ fontSize: 11, color: defaultStatus === "saved" ? "#16a34a" : "#ef4444", overflowWrap: "anywhere" }}>
+              {defaultStatus === "saved" ? "Saved" : defaultStatus}
+            </span>
+          )}
         </div>
 
         {/* Body */}
