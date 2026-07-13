@@ -4,6 +4,7 @@ import {
   getConfiguredModelKeys,
   orderAvailableModels,
 } from "../../../lib/model-list.ts";
+import { resolveEffectiveDefault } from "../../../lib/auth/model-preference-store.ts";
 
 const models = [
   { provider: "openai", id: "gpt-4", name: "GPT-4" },
@@ -48,4 +49,15 @@ test("extracts only explicit model definitions from models config", () => {
     ["glm:glm-5.2", "qwen:qwen3.6"]
   );
   assert.deepEqual(getConfiguredModelKeys(null), []);
+});
+
+test("invalid preference falls back to the available global default", () => {
+  const effective = resolveEffectiveDefault(
+    models,
+    { provider: "removed", modelId: "removed" },
+    { provider: "glm", modelId: "glm-5.2" }
+  );
+
+  assert.deepEqual(effective, { provider: "glm", modelId: "glm-5.2" });
+  assert.equal(orderAvailableModels(models, effective, [])[0].id, "glm-5.2");
 });

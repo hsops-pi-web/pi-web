@@ -9,6 +9,11 @@ import {
   orderAvailableModels,
   type ModelListEntry,
 } from "@/lib/model-list";
+import {
+  getUserModelPreference,
+  resolveEffectiveDefault,
+  type ModelRef,
+} from "@/lib/auth/model-preferences";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +24,7 @@ export async function GET(req: Request) {
   const nameMap = new Map<string, string>();
   let modelList: { id: string; name: string; provider: string }[] = [];
   let defaultModel: { provider: string; modelId: string } | null = null;
+  let globalDefaultModel: ModelRef | null = null;
   const thinkingLevels: Record<string, string[]> = {};
   const thinkingLevelMaps: Record<string, Record<string, string | null>> = {};
 
@@ -44,8 +50,13 @@ export async function GET(req: Request) {
     const modelId = settings.getDefaultModel();
     if (provider) {
       const providerFallback = availableModels.find((model) => model.provider === provider);
-      defaultModel = { provider, modelId: modelId ?? providerFallback?.id ?? "" };
+      globalDefaultModel = { provider, modelId: modelId ?? providerFallback?.id ?? "" };
     }
+    defaultModel = resolveEffectiveDefault(
+      availableModels,
+      getUserModelPreference(username),
+      globalDefaultModel
+    );
 
     let configuredModelKeys: string[] = [];
     try {
@@ -57,5 +68,12 @@ export async function GET(req: Request) {
     modelList = orderAvailableModels(availableModels, defaultModel, configuredModelKeys);
   } catch { /* return empty */ }
 
-  return Response.json({ models: Object.fromEntries(nameMap), modelList, defaultModel, thinkingLevels, thinkingLevelMaps });
+  return Response.json({
+    models: Object.fromEntries(nameMap),
+    modelList,
+    defaultModel,
+    globalDefaultModel,
+    thinkingLevels,
+    thinkingLevelMaps,
+  });
 }
