@@ -10,6 +10,7 @@ import {
   type DeleteLock,
 } from "./auth/delete-lock";
 import { canonicalizeExistingPrefix } from "./auth/paths";
+import { createSessionSettingsManager } from "./session-settings";
 
 // ============================================================================
 // Types
@@ -448,16 +449,14 @@ export async function startRpcSession(
 
   const starting = (async () => {
     try {
-      const { SessionManager, getAgentDir, DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+      const { SessionManager, getAgentDir, DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
       const agentDir = getAgentDir();
 
       const sessionManager = sessionFile
         ? SessionManager.open(sessionFile, undefined)
         : SessionManager.create(canonicalCwd, undefined);
       const extraExtensionPaths = getExtraExtensionPaths();
-      const settingsManager = extraExtensionPaths.length > 0
-        ? SettingsManager.create(canonicalCwd, agentDir)
-        : undefined;
+      const settingsManager = createSessionSettingsManager(canonicalCwd, agentDir);
       const resourceLoader = extraExtensionPaths.length > 0
         ? new DefaultResourceLoader({
             cwd: canonicalCwd,
@@ -475,7 +474,7 @@ export async function startRpcSession(
         cwd: canonicalCwd,
         agentDir,
         sessionManager,
-        ...(settingsManager ? { settingsManager } : {}),
+        settingsManager,
         ...(resourceLoader ? { resourceLoader } : {}),
         ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
       });
