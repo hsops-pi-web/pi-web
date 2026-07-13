@@ -1,8 +1,15 @@
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
-import { existsSync, readdirSync, statSync } from "fs";
-import { delimiter, join, resolve } from "path";
-import { cacheSessionPath } from "./session-reader";
+import { existsSync, readdirSync, rmSync, statSync } from "fs";
+import path, { delimiter, join, resolve } from "path";
+import { cacheSessionPath, invalidateSessionPathCache } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import {
+  assertSessionCommandAllowed,
+  createDeleteLock,
+  createDeleteWindowAbortError,
+  type DeleteLock,
+} from "./auth/delete-lock";
+import { canonicalizeExistingPrefix } from "./auth/paths";
 
 // ============================================================================
 // Types
@@ -148,8 +155,10 @@ export class AgentSessionWrapper {
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
-    this.resetIdleTimer();
     const type = command.type as string;
+    const deleting = type === "abort" ? false : isCwdDeleting(this.cwd);
+    assertSessionCommandAllowed(this._alive, deleting, type);
+    this.resetIdleTimer();
 
     switch (type) {
       case "prompt": {
@@ -335,6 +344,43 @@ export class AgentSessionWrapper {
 declare global {
   var __piSessions: Map<string, AgentSessionWrapper> | undefined;
   var __piStartLocks: Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> | undefined;
+  var __piDeleteLock: DeleteLock | undefined;
+}
+
+function getDeleteLock(): DeleteLock {
+  if (!globalThis.__piDeleteLock) globalThis.__piDeleteLock = createDeleteLock();
+  return globalThis.__piDeleteLock;
+}
+
+function canon(target: string): string {
+  return canonicalizeExistingPrefix(target || "");
+}
+
+function isCwdDeleting(cwd: string): boolean {
+  return getDeleteLock().isCwdUnderDeletingRoot(canon(cwd));
+}
+
+export function markRootDeleting(rootDir: string): void {
+  getDeleteLock().markRootDeleting(canon(rootDir));
+}
+
+export function unmarkRootDeleting(rootDir: string): void {
+  getDeleteLock().unmarkRootDeleting(canon(rootDir));
+}
+
+export async function waitForStartsUnderRoot(rootDir: string): Promise<void> {
+  return getDeleteLock().waitForStartsUnderRoot(canon(rootDir));
+}
+
+export async function withCwdOperationGuard<T>(
+  cwd: string,
+  body: () => Promise<T>
+): Promise<T> {
+  return getDeleteLock().withStartGuardCanonical(canon(cwd), body);
+}
+
+export async function withStartGuard<T>(cwd: string, body: () => Promise<T>): Promise<T> {
+  return withCwdOperationGuard(cwd, body);
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
@@ -357,6 +403,21 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
   return getRegistry().get(sessionId);
 }
 
+export async function abortSessionsUnderCwd(rootDir: string): Promise<number> {
+  const root = canon(rootDir);
+  const registry = getRegistry();
+  let count = 0;
+  for (const [id, wrapper] of Array.from(registry.entries())) {
+    const cwd = canon(wrapper.cwd || "");
+    if (cwd !== root && !cwd.startsWith(root + path.sep)) continue;
+    await wrapper.send({ type: "abort" });
+    wrapper.destroy();
+    registry.delete(id);
+    count++;
+  }
+  return count;
+}
+
 /**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
@@ -371,75 +432,97 @@ export async function startRpcSession(
   const registry = getRegistry();
   const locks = getLocks();
 
+  const canonicalCwd = canon(cwd);
+  const deleteLock = getDeleteLock();
+  if (deleteLock.isCwdUnderDeletingRoot(canonicalCwd)) {
+    throw new Error("用户目录正在删除，拒绝启动或复用会话");
+  }
+
   const existing = registry.get(sessionId);
   if (existing?.isAlive()) return { session: existing, realSessionId: sessionId };
 
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
 
+  const startKey = deleteLock.nextKey("__start__");
+
   const starting = (async () => {
-    const { SessionManager, getAgentDir, DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-    const agentDir = getAgentDir();
+    try {
+      const { SessionManager, getAgentDir, DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+      const agentDir = getAgentDir();
 
-    const sessionManager = sessionFile
-      ? SessionManager.open(sessionFile, undefined)
-      : SessionManager.create(cwd, undefined);
-    const extraExtensionPaths = getExtraExtensionPaths();
-    const settingsManager = extraExtensionPaths.length > 0 ? SettingsManager.create(cwd, agentDir) : undefined;
-    const resourceLoader = extraExtensionPaths.length > 0
-      ? new DefaultResourceLoader({
-          cwd,
-          agentDir,
-          settingsManager,
-          additionalExtensionPaths: extraExtensionPaths,
-        })
-      : undefined;
-    if (resourceLoader) await resourceLoader.reload();
+      const sessionManager = sessionFile
+        ? SessionManager.open(sessionFile, undefined)
+        : SessionManager.create(canonicalCwd, undefined);
+      const extraExtensionPaths = getExtraExtensionPaths();
+      const settingsManager = extraExtensionPaths.length > 0
+        ? SettingsManager.create(canonicalCwd, agentDir)
+        : undefined;
+      const resourceLoader = extraExtensionPaths.length > 0
+        ? new DefaultResourceLoader({
+            cwd: canonicalCwd,
+            agentDir,
+            settingsManager,
+            additionalExtensionPaths: extraExtensionPaths,
+          })
+        : undefined;
+      if (resourceLoader) await resourceLoader.reload();
 
-    // Determine which tools to pass based on requested toolNames.
-    // Do not pass a non-empty built-in allowlist at creation time: that prevents
-    // extension tools from being loaded into the session. For Low/High presets,
-    // create with defaults and narrow active tools after extension discovery.
-    let toolsOption: string[] | undefined;
-    if (toolNames !== undefined) {
-      toolsOption = toolNames.length === 0 ? [] : undefined;
+      let toolsOption: string[] | undefined;
+      if (toolNames !== undefined) toolsOption = toolNames.length === 0 ? [] : undefined;
+
+      const { session: inner } = await createAgentSession({
+        cwd: canonicalCwd,
+        agentDir,
+        sessionManager,
+        ...(settingsManager ? { settingsManager } : {}),
+        ...(resourceLoader ? { resourceLoader } : {}),
+        ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+      });
+
+      if (toolNames && toolNames.length > 0) setActiveTools(inner, toolNames);
+      if (toolNames?.length === 0) inner.agent.state.systemPrompt = "";
+
+      const wrapper = new AgentSessionWrapper(inner);
+      wrapper.cwd = canonicalCwd;
+      wrapper.start();
+
+      const realSessionId = inner.sessionId as string;
+      const realSessionFile = inner.sessionFile as string | undefined;
+      if (deleteLock.isCwdUnderDeletingRoot(canonicalCwd)) {
+        let cleanupError: unknown = null;
+        try {
+          wrapper.destroy();
+          await inner.abort();
+        } catch (error) {
+          cleanupError = error;
+        }
+        try {
+          inner.dispose?.();
+        } catch (error) {
+          cleanupError ??= error;
+        }
+        try {
+          if (realSessionFile) {
+            rmSync(realSessionFile, { force: true });
+            invalidateSessionPathCache(realSessionId);
+          }
+        } catch (error) {
+          cleanupError ??= error;
+        }
+        throw createDeleteWindowAbortError(cleanupError);
+      }
+
+      if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
+      wrapper.onDestroy(() => registry.delete(realSessionId));
+      registry.set(realSessionId, wrapper);
+      return { session: wrapper, realSessionId };
+    } finally {
+      deleteLock.unregisterStart(startKey);
     }
-
-    const { session: inner } = await createAgentSession({
-      cwd,
-      agentDir,
-      sessionManager,
-      ...(settingsManager ? { settingsManager } : {}),
-      ...(resourceLoader ? { resourceLoader } : {}),
-      ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
-    });
-
-    // If specific tool names were requested (non-empty), narrow active tools now
-    if (toolNames && toolNames.length > 0) {
-      setActiveTools(inner, toolNames);
-    }
-
-    // When all tools are disabled, clear the system prompt entirely.
-    // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
-    // the only way to truly clear it is to call agent.setSystemPrompt directly.
-    if (toolNames?.length === 0) {
-      inner.agent.state.systemPrompt = "";
-    }
-
-    const wrapper = new AgentSessionWrapper(inner);
-    wrapper.cwd = cwd;
-    wrapper.start();
-
-    const realSessionId = inner.sessionId as string;
-    const realSessionFile = inner.sessionFile as string | undefined;
-    if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
-
-    wrapper.onDestroy(() => registry.delete(realSessionId));
-    registry.set(realSessionId, wrapper);
-
-    return { session: wrapper, realSessionId };
   })().finally(() => locks.delete(sessionId));
 
+  deleteLock.registerStart(startKey, canonicalCwd, starting);
   locks.set(sessionId, starting);
   return starting;
 }

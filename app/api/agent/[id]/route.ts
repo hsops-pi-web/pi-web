@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
+import {
+  startRpcSession,
+  getRpcSession,
+  withCwdOperationGuard,
+} from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { checkSessionOwnership } from "@/lib/auth/session-guard";
 
@@ -19,17 +23,19 @@ export async function POST(
   try {
     const body = await req.json() as { type: string; [key: string]: unknown };
 
-    // Fast path: already-running session
-    const existing = getRpcSession(id);
-    if (existing?.isAlive()) {
-      const result = await existing.send(body);
-      return NextResponse.json({ success: true, data: result });
-    }
+    const running = getRpcSession(id);
+    const cwd = running?.isAlive()
+      ? running.cwd
+      : SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
 
-    const cwd = SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
-
-    const { session } = await startRpcSession(id, guard.filePath, cwd);
-    const result = await session.send(body);
+    const result = await withCwdOperationGuard(cwd, async () => {
+      let session = getRpcSession(id);
+      if (!session?.isAlive()) {
+        const started = await startRpcSession(id, guard.filePath, cwd);
+        session = started.session;
+      }
+      return session.send(body);
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {

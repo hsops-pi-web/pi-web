@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { completeSimple, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { getSessionUser } from "@/lib/auth/session";
+import { requireAdmin } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +26,8 @@ function getAssistantText(message: AssistantMessage): string {
 }
 
 export async function POST(req: Request) {
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireAdmin(req);
+  if (guard instanceof NextResponse) return guard;
 
   let tempDir: string | undefined;
 

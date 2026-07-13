@@ -2,7 +2,12 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { getFileIcon, FolderIcon } from "./FileIcons";
-import { encodeFilePathForApi, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
+import {
+  buildFileUrl,
+  encodeFilePathForApi,
+  getRelativeFilePath,
+  joinFilePath,
+} from "@/lib/file-paths";
 import { authFetch } from "@/lib/client-auth-fetch";
 
 interface FileEntry {
@@ -26,11 +31,12 @@ interface Props {
   onOpenFile: (filePath: string, fileName: string) => void;
   refreshKey?: number;
   onAtMention?: (relativePath: string) => void;
+  readOnly?: boolean;
+  urlBase?: string;
 }
 
-async function fetchEntries(dirPath: string): Promise<FileNode[]> {
-  const encoded = encodeFilePathForApi(dirPath);
-  const res = await authFetch(`/api/files/${encoded}?type=list`);
+async function fetchEntries(dirPath: string, urlBase?: string): Promise<FileNode[]> {
+  const res = await authFetch(buildFileUrl(dirPath, "list", urlBase));
   if (!res.ok) return [];
   const data = await res.json() as { entries?: FileEntry[] };
   return (data.entries ?? []).map((e) => ({
@@ -53,6 +59,8 @@ function TreeNode({
   onToggleExpanded,
   refreshKey,
   bumpRefresh,
+  readOnly,
+  urlBase,
 }: {
   node: FileNode;
   depth: number;
@@ -63,6 +71,8 @@ function TreeNode({
   onToggleExpanded: (fullPath: string, open: boolean) => void;
   refreshKey?: number;
   bumpRefresh?: () => void;
+  readOnly?: boolean;
+  urlBase?: string;
 }) {
   const open = expandedPaths.has(node.fullPath);
   const [children, setChildren] = useState<FileNode[]>(node.children ?? []);
@@ -74,7 +84,7 @@ function TreeNode({
     if (loaded && !force) return;
     setLoading(true);
     try {
-      const entries = await fetchEntries(node.fullPath);
+      const entries = await fetchEntries(node.fullPath, urlBase);
       setChildren(entries);
       setLoaded(true);
     } catch {
@@ -82,7 +92,7 @@ function TreeNode({
     } finally {
       setLoading(false);
     }
-  }, [loaded, node.fullPath]);
+  }, [loaded, node.fullPath, urlBase]);
 
   // When refreshKey causes a re-render with the same node identity, reload open dirs
   const prevLoadedRef = useRef(loaded);
@@ -159,7 +169,7 @@ function TreeNode({
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
           </svg>
         )}
-        {onAtMention && hovered && (
+        {!readOnly && onAtMention && hovered && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -194,7 +204,7 @@ function TreeNode({
             mention
           </button>
         )}
-        {hovered && (
+        {!readOnly && hovered && (
           <button
             onClick={async (e) => {
               e.stopPropagation();
@@ -225,7 +235,7 @@ function TreeNode({
       {node.isDir && open && (
         <div>
           {children.map((child) => (
-            <TreeNode key={child.fullPath} node={child} depth={depth + 1} cwd={cwd} onOpenFile={onOpenFile} onAtMention={onAtMention} expandedPaths={expandedPaths} onToggleExpanded={onToggleExpanded} refreshKey={refreshKey} bumpRefresh={bumpRefresh} />
+            <TreeNode key={child.fullPath} node={child} depth={depth + 1} cwd={cwd} onOpenFile={onOpenFile} onAtMention={onAtMention} expandedPaths={expandedPaths} onToggleExpanded={onToggleExpanded} refreshKey={refreshKey} bumpRefresh={bumpRefresh} readOnly={readOnly} urlBase={urlBase} />
           ))}
           {children.length === 0 && loaded && (
             <div style={{ paddingLeft: 8 + (depth + 1) * 14, fontSize: 11, color: "var(--text-dim)", height: 22, display: "flex", alignItems: "center" }}>
@@ -238,7 +248,14 @@ function TreeNode({
   );
 }
 
-export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props) {
+export function FileExplorer({
+  cwd,
+  onOpenFile,
+  refreshKey,
+  onAtMention,
+  readOnly = false,
+  urlBase,
+}: Props) {
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -265,11 +282,11 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
 
     setLoading(cwdChanged);
     setError(null);
-    fetchEntries(cwd)
+    fetchEntries(cwd, urlBase)
       .then((entries) => setRoots(entries))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [cwd, refreshKey, localRefresh]);
+  }, [cwd, refreshKey, localRefresh, urlBase]);
 
   if (loading) {
     return (
@@ -301,6 +318,8 @@ export function FileExplorer({ cwd, onOpenFile, refreshKey, onAtMention }: Props
           onToggleExpanded={handleToggleExpanded}
           refreshKey={(refreshKey ?? 0) + localRefresh}
           bumpRefresh={bumpRefresh}
+          readOnly={readOnly}
+          urlBase={urlBase}
         />
       ))}
       {roots.length === 0 && (

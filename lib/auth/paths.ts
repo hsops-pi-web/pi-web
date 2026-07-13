@@ -1,6 +1,6 @@
 import os from "os";
 import path from "path";
-import { realpathSync } from "fs";
+import { lstatSync, realpathSync } from "fs";
 
 export function getUserRoot(username: string): string {
   return path.join(os.homedir(), "pi-users", username);
@@ -36,4 +36,38 @@ export function resolveParentAndCheck(target: string, username: string): boolean
     return false; // 父目录不存在 → 拒绝
   }
   return isInsideUserRoot(path.join(resolvedParent, path.basename(abs)), username);
+}
+
+export function canonicalizeExistingPrefix(target: string): string {
+  const absolute = path.resolve(target);
+  const segments = absolute.split(path.sep).filter(Boolean);
+
+  for (let index = segments.length; index >= 0; index--) {
+    const prefix = path.sep + segments.slice(0, index).join(path.sep);
+    let exists = index === 0;
+    if (!exists) {
+      try {
+        lstatSync(prefix);
+        exists = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    if (!exists) continue;
+
+    const realPrefix = index === 0 ? path.sep : realpathSync(prefix);
+    const remainder = segments.slice(index);
+    return remainder.length ? path.join(realPrefix, ...remainder) : realPrefix;
+  }
+
+  return absolute;
+}
+
+export function resolveSessionOwnership(cwd: string, username: string): boolean {
+  if (!cwd) return false;
+  try {
+    return isInsideUserRoot(canonicalizeExistingPrefix(cwd), username);
+  } catch {
+    return false;
+  }
 }

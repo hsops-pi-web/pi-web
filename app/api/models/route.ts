@@ -1,7 +1,14 @@
 import { AuthStorage, ModelRegistry, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
+import {
+  getConfiguredModelKeys,
+  orderAvailableModels,
+  type ModelListEntry,
+} from "@/lib/model-list";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +27,7 @@ export async function GET(req: Request) {
     const authStorage = AuthStorage.create();
     const registry = ModelRegistry.create(authStorage);
     const available = registry.getAvailable();
-    modelList = available.map((m: { id: string; name: string; provider: string }) => ({
+    const availableModels: ModelListEntry[] = available.map((m: { id: string; name: string; provider: string }) => ({
       id: m.id,
       name: m.name,
       provider: m.provider,
@@ -36,8 +43,18 @@ export async function GET(req: Request) {
     const provider = settings.getDefaultProvider();
     const modelId = settings.getDefaultModel();
     if (provider) {
-      defaultModel = { provider, modelId: modelId ?? available[0]?.id ?? "" };
+      const providerFallback = availableModels.find((model) => model.provider === provider);
+      defaultModel = { provider, modelId: modelId ?? providerFallback?.id ?? "" };
     }
+
+    let configuredModelKeys: string[] = [];
+    try {
+      const modelsConfig = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8"));
+      configuredModelKeys = getConfiguredModelKeys(modelsConfig);
+    } catch {
+      // Missing or invalid models.json leaves the registry order unchanged.
+    }
+    modelList = orderAvailableModels(availableModels, defaultModel, configuredModelKeys);
   } catch { /* return empty */ }
 
   return Response.json({ models: Object.fromEntries(nameMap), modelList, defaultModel, thinkingLevels, thinkingLevelMaps });

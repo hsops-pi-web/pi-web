@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { runNpx } from "@/lib/npx";
-import { getSessionUser } from "@/lib/auth/session";
+import { requireAdmin } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +8,8 @@ const ANSI_RE = /\x1B\[[0-9;]*m/g;
 
 // POST /api/skills/install  body: { package: string; scope: "global" | "project"; cwd?: string }
 export async function POST(req: Request) {
-  const username = getSessionUser(req);
-  if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireAdmin(req);
+  if (guard instanceof NextResponse) return guard;
 
   try {
     const { package: pkg, scope, cwd } = await req.json() as { package?: string; scope?: string; cwd?: string };

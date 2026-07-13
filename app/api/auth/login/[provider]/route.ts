@@ -1,4 +1,6 @@
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ provider: string }> }
 ) {
+  const guard = requireAdmin(req);
+  if (guard instanceof NextResponse) return guard;
   const { provider } = await params;
   const { token, code } = (await req.json()) as { token?: string; code?: string };
 
@@ -44,6 +48,8 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ provider: string }> }
 ) {
+  const guard = requireAdmin(req);
+  if (guard instanceof NextResponse) return guard;
   const { provider } = await params;
 
   const encoder = new TextEncoder();
