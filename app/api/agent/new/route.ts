@@ -5,7 +5,9 @@ import { startRpcSession, withStartGuard } from "@/lib/rpc-manager";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
 import { setUserModelPreference } from "@/lib/auth/model-preferences";
-import { switchModelAndRemember } from "@/lib/model-selection";
+import { getUserModelPreference } from "@/lib/auth/model-preferences";
+import { applyNewSessionModel } from "@/lib/model-selection";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 function expandHomePath(path: string): string {
   if (path === "~") return homedir();
@@ -33,20 +35,27 @@ export async function POST(req: Request) {
     if (!ok) {
       return NextResponse.json({ error: "cwd 必须在你的用户目录内" }, { status: 400 });
     }
-    const { provider, modelId, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: string; [key: string]: unknown };
+    const { provider, modelId, rememberModel, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; rememberModel?: boolean; toolNames?: string[]; thinkingLevel?: string; [key: string]: unknown };
+    const requestedModel = provider && modelId ? { provider, modelId } : null;
+    const storedPreference = getUserModelPreference(username);
+    const availablePreference = storedPreference && ModelRegistry
+      .create(AuthStorage.create())
+      .getAvailable()
+      .some((model) => model.provider === storedPreference.provider && model.id === storedPreference.modelId)
+      ? storedPreference
+      : null;
     const payload = await withStartGuard(cwd, async () => {
       mkdirSync(cwd, { recursive: true });
       const tempKey = `__new__${Date.now()}`;
       const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
-      if (provider && modelId) {
-        await switchModelAndRemember(
-          session,
-          username,
-          provider,
-          modelId,
-          setUserModelPreference
-        );
-      }
+      await applyNewSessionModel(
+        session,
+        username,
+        requestedModel,
+        availablePreference,
+        rememberModel === true,
+        setUserModelPreference
+      );
       if (thinkingLevel) {
         await session.send({ type: "set_thinking_level", level: thinkingLevel });
       }
