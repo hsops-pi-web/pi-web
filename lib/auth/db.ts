@@ -26,6 +26,12 @@ export function getDb(): Database.Database {
       username TEXT NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS user_model_preferences (
+      username TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   const columns = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
   const hasColumn = (name: string) => columns.some((column) => column.name === name);
