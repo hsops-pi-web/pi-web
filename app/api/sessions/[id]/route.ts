@@ -8,11 +8,10 @@ import {
   listAllSessions,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
-import { checkSessionOwnership } from "@/lib/auth/session-guard";
+import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 
 function ownershipDenied(status: 401 | 404): Response {
-  const msg = status === 401 ? "未登录" : "Session not found";
-  return NextResponse.json({ error: msg }, { status });
+  return NextResponse.json({ error: sessionGuardMessage(status) }, { status });
 }
 
 export async function GET(

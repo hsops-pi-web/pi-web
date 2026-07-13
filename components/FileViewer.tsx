@@ -13,7 +13,7 @@ import {
   getFileName,
   getRelativeFilePath,
 } from "@/lib/file-paths";
-import { authFetch } from "@/lib/client-auth-fetch";
+import { authFetch, redirectIfUnauthorized } from "@/lib/client-auth-fetch";
 
 interface Props {
   filePath: string;
@@ -357,7 +357,7 @@ function ImageViewer({ filePath, cwd, readOnly, urlBase }: Props) {
     es.addEventListener("error", () => setWatching(false));
     es.onerror = () => {
       setWatching(false);
-      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
+      redirectIfUnauthorized();
     };
 
     return () => {
@@ -497,7 +497,7 @@ function AudioViewer({ filePath, cwd, readOnly, urlBase }: Props) {
     es.addEventListener("error", () => setWatching(false));
     es.onerror = () => {
       setWatching(false);
-      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
+      redirectIfUnauthorized();
     };
 
     return () => {
@@ -715,7 +715,7 @@ function TextFileViewer({ filePath, cwd, readOnly, urlBase }: Props) {
 
     es.onerror = () => {
       setWatching(false);
-      fetch("/api/auth/me").then((res) => { if (res.status === 401) window.location.href = "/login"; }).catch(() => {});
+      redirectIfUnauthorized();
     };
 
     return () => {

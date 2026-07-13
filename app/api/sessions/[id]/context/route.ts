@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildSessionContext } from "@/lib/session-reader";
-import { checkSessionOwnership } from "@/lib/auth/session-guard";
+import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 
 export async function GET(
   req: Request,
@@ -14,8 +14,7 @@ export async function GET(
   try {
     const guard = await checkSessionOwnership(req, id);
     if (!guard.ok) {
-      const msg = guard.status === 401 ? "未登录" : "Session not found";
-      return NextResponse.json({ error: msg }, { status: guard.status });
+      return NextResponse.json({ error: sessionGuardMessage(guard.status) }, { status: guard.status });
     }
 
     const sm = SessionManager.open(guard.filePath);

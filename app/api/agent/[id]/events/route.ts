@@ -1,6 +1,6 @@
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { checkSessionOwnership } from "@/lib/auth/session-guard";
+import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +13,7 @@ export async function GET(
 
   const guard = await checkSessionOwnership(req, id);
   if (!guard.ok) {
-    const msg = guard.status === 401 ? "未登录" : "Session not found";
-    return new Response(msg, { status: guard.status });
+    return new Response(sessionGuardMessage(guard.status), { status: guard.status });
   }
 
   // Fast path: already-running session

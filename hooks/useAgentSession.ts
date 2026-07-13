@@ -5,7 +5,7 @@ import type { AgentMessage, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand, uploadFiles } from "@/lib/agent-client";
 import type { ToolEntry } from "@/components/ToolPanel";
-import { authFetch } from "@/lib/client-auth-fetch";
+import { authFetch, redirectIfUnauthorized } from "@/lib/client-auth-fetch";
 
 export interface SessionData {
   sessionId: string;
@@ -243,12 +243,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (eventSourceRef.current === es && agentRunningRef.current) {
         es.close();
         eventSourceRef.current = null;
-        fetch("/api/auth/me").then((res) => {
-          if (res.status === 401) { window.location.href = "/login"; return; }
-          setTimeout(() => {
-            if (agentRunningRef.current) connectEvents(sid);
-          }, 1000);
-        }).catch(() => {
+        redirectIfUnauthorized().then((redirected) => {
+          if (redirected) return;
           setTimeout(() => {
             if (agentRunningRef.current) connectEvents(sid);
           }, 1000);

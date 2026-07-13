@@ -8,6 +8,11 @@ export type SessionGuardResult =
   | { ok: true; filePath: string; cwd: string }
   | { ok: false; status: 401 | 404 };
 
+// 归属校验失败时的统一提示：401 表示未登录，其余按“未找到”处理，不泄露 session 是否存在。
+export function sessionGuardMessage(status: 401 | 404): string {
+  return status === 401 ? "未登录" : "Session not found";
+}
+
 // 会话归属校验：确认请求者已登录，且目标 session 的 cwd 落在其用户目录内。
 // 返回已解析的 filePath 与 cwd 供调用方复用，避免重复 resolveSessionPath / open。
 // 越权与未找到都返回 404，不泄露 session id 是否存在。

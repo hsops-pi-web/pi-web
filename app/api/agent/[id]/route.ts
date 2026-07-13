@@ -5,7 +5,7 @@ import {
   withCwdOperationGuard,
 } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { checkSessionOwnership } from "@/lib/auth/session-guard";
+import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -16,8 +16,7 @@ export async function POST(
 
   const guard = await checkSessionOwnership(req, id);
   if (!guard.ok) {
-    const msg = guard.status === 401 ? "未登录" : "Session not found";
-    return NextResponse.json({ error: msg }, { status: guard.status });
+    return NextResponse.json({ error: sessionGuardMessage(guard.status) }, { status: guard.status });
   }
 
   try {
@@ -52,8 +51,7 @@ export async function GET(
 
   const guard = await checkSessionOwnership(req, id);
   if (!guard.ok) {
-    const msg = guard.status === 401 ? "未登录" : "Session not found";
-    return NextResponse.json({ error: msg }, { status: guard.status });
+    return NextResponse.json({ error: sessionGuardMessage(guard.status) }, { status: guard.status });
   }
 
   try {
