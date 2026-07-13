@@ -4,6 +4,8 @@ import { homedir } from "os";
 import { startRpcSession, withStartGuard } from "@/lib/rpc-manager";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
+import { setUserModelPreference } from "@/lib/auth/model-preferences";
+import { switchModelAndRemember } from "@/lib/model-selection";
 
 function expandHomePath(path: string): string {
   if (path === "~") return homedir();
@@ -37,7 +39,13 @@ export async function POST(req: Request) {
       const tempKey = `__new__${Date.now()}`;
       const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
       if (provider && modelId) {
-        await session.send({ type: "set_model", provider, modelId });
+        await switchModelAndRemember(
+          session,
+          username,
+          provider,
+          modelId,
+          setUserModelPreference
+        );
       }
       if (thinkingLevel) {
         await session.send({ type: "set_thinking_level", level: thinkingLevel });

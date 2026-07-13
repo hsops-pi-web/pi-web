@@ -6,6 +6,8 @@ import {
 } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { checkSessionOwnership } from "@/lib/auth/session-guard";
+import { setUserModelPreference } from "@/lib/auth/model-preferences";
+import { switchModelAndRemember } from "@/lib/model-selection";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -33,6 +35,20 @@ export async function POST(
       if (!session?.isAlive()) {
         const started = await startRpcSession(id, guard.filePath, cwd);
         session = started.session;
+      }
+      if (body.type === "set_model") {
+        const provider = typeof body.provider === "string" ? body.provider : "";
+        const modelId = typeof body.modelId === "string" ? body.modelId : "";
+        if (!provider || !modelId) {
+          throw new Error("provider and modelId are required");
+        }
+        return switchModelAndRemember(
+          session,
+          guard.username,
+          provider,
+          modelId,
+          setUserModelPreference
+        );
       }
       return session.send(body);
     });
