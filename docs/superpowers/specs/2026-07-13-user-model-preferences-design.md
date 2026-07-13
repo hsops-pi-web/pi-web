@@ -182,4 +182,16 @@ Models 弹窗头部下方增加紧凑的全局默认工具栏：
 - 普通用户界面不显示 Models、Skills 和后台入口，但聊天模型选择器仍显示完整可用列表；配置 API 返回 403。
 - 删除临时用户后，users、sessions、user_model_preferences 和用户工作目录均无残留。
 - 管理员 Models 界面已在 1440x900 和 390x844 验证，无横向溢出，并能显式保存及恢复全局默认。
-- 生产 `http://127.0.0.1:8000/login` 持续返回 200；未合并、未构建、未重启生产服务。
+- 隔离验收期间生产 `http://127.0.0.1:8000/login` 持续返回 200，未提前修改生产数据或构建。
+
+### 生产发布
+
+2026-07-13 用户验收通过后发布到 `main`：
+
+- 发布前 `main` 的既有鉴权改动先独立验证并提交为 `ecc66a6`，回滚分支为 `backup/pre-user-model-preferences-20260713-152855`。
+- 功能分支合并提交为 `508c838`；唯一冲突同时保留统一鉴权错误提示和模型切换后保存用户偏好。
+- 停止服务后，将生产数据和旧 `.next` 备份至 `/home/hsops/pi-web-auth-backups/20260713-153201-pre-user-model-preferences`，备份数据库 `integrity_check` 为 `ok`。
+- 合并后 auth 测试 `54/54`、改动文件 ESLint 和生产源码类型检查通过，`npm run build` 成功。
+- `pi-web-auth.service` 已重新启动，生产地址 `http://10.16.49.16:8000/` 返回 200。
+- 发布前后均为 3 个用户、13 个登录会话、17 个 Pi 会话文件；迁移新增空的 `user_model_preferences` 表，现有管理员和普通用户 cookie 继续有效。
+- 生产浏览器检查确认管理员全局默认控件可用，普通用户仍看不到 Models、Skills 和后台入口。
