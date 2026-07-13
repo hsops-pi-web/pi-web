@@ -78,7 +78,10 @@ export async function deleteUserCompletely(
     }
 
     rmSync(userRootPath, { recursive: true, force: true });
-    db.prepare("DELETE FROM users WHERE username=?").run(username);
+    db.transaction(() => {
+      db.prepare("DELETE FROM user_model_preferences WHERE username=?").run(username);
+      db.prepare("DELETE FROM users WHERE username=?").run(username);
+    })();
     return { ok: true };
   } catch (error) {
     return { ok: false, error: String(error) };

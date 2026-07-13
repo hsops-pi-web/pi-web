@@ -258,7 +258,7 @@ test("invalid preference falls back to available global default", () => {
 });
 ```
 
-Run: `node --experimental-strip-types --test __tests__/lib/auth/model-list.test.ts`。  
+Run: `node --experimental-strip-types --test __tests__/lib/auth/model-list.test.ts`。
 Expected: 缺少 `resolveEffectiveDefault` 导入时 FAIL；接入 Task 1 导出后 PASS。
 
 - [ ] **Step 2: 接入用户偏好和全局默认**

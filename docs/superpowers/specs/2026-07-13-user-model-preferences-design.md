@@ -1,8 +1,8 @@
 # 用户模型偏好与全局默认隔离设计
 
-日期：2026-07-13  
-分支：`feat/user-model-preferences`  
-生产：`main` worktree `/home/hsops/pi-web-auth`，用户级 `pi-web-auth.service`，端口 8000  
+日期：2026-07-13
+分支：`feat/user-model-preferences`
+生产：`main` worktree `/home/hsops/pi-web-auth`，用户级 `pi-web-auth.service`，端口 8000
 开发：worktree `/home/hsops/pi-web-auth-model-preferences`，隔离 HOME `/home/hsops/.pi-model-pref-dev-home`，端口 8144
 
 ## 1. 背景
@@ -160,3 +160,26 @@ Models 弹窗头部下方增加紧凑的全局默认工具栏：
 7. 确认普通用户仍看不到 Models/Skills，配置 API 仍为 403。
 
 生产 8000 在开发和验收期间保持运行且不修改。发布继续遵循 `AGENTS.md` 的备份、合并、构建和 systemd 流程。
+
+## 11. 实施记录
+
+实施分支为 `feat/user-model-preferences`，提交包括：
+
+- `21f6bc4`：用户偏好存储与默认解析。
+- `4507ca1`：会话 SettingsManager 内存隔离。
+- `46167aa`：模型切换成功后保存用户偏好。
+- `7d0bb4c`：新会话优先使用用户模型偏好。
+- `2f5b8ff`：管理员显式设置全局默认 API。
+- `d466965`：Models 界面全局默认控制。
+
+最终验收在隔离 HOME 和 8144 端口完成：
+
+- auth 测试 `54/54` 通过，所有改动文件 ESLint 通过。
+- `tsc --noEmit` 仅保留仓库既有的测试配置错误：缺少 Jest/Testing Library 类型，以及测试文件 `.ts` 导入扩展未启用；生产源码无新增类型错误。
+- Alice、Bob、管理员分别保存不同模型偏好，`GET /api/models` 返回各自默认模型且模型列表首项一致。
+- 无显式模型参数的新会话恢复用户偏好；自动预选不会被误写成用户偏好，手动选择才会记忆。
+- 聊天模型和 thinking level 切换前后，隔离 `settings.json` 的 SHA-256 保持不变；管理员聊天切换不改变全局默认。
+- 普通用户界面不显示 Models、Skills 和后台入口，但聊天模型选择器仍显示完整可用列表；配置 API 返回 403。
+- 删除临时用户后，users、sessions、user_model_preferences 和用户工作目录均无残留。
+- 管理员 Models 界面已在 1440x900 和 390x844 验证，无横向溢出，并能显式保存及恢复全局默认。
+- 生产 `http://127.0.0.1:8000/login` 持续返回 200；未合并、未构建、未重启生产服务。
