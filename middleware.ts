@@ -6,6 +6,10 @@ const PUBLIC_PATHS = new Set<string>([
   "/api/auth/register-gate",
   "/api/auth/register",
   "/api/auth/login",
+  "/api/health/live",
+  "/api/health/ready",
+  "/api/internal/drain",
+  "/api/internal/resume",
 ]);
 
 export function middleware(req: NextRequest) {

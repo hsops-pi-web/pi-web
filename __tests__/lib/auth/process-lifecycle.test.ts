@@ -197,3 +197,24 @@ test("dispose errors use the dispose phase", async () => {
   const result = await lifecycle.drain({ graceMs: 0 });
   assert.deepEqual(result.errors, [{ sessionId: "dispose", phase: "dispose" }]);
 });
+
+test("release token requires an exact constant-time Bearer match", async () => {
+  const { isAuthorizedReleaseRequest } = await import("../../../lib/release-auth.ts");
+  const env = { PI_WEB_RELEASE_TOKEN: "0123456789abcdef" };
+  assert.equal(isAuthorizedReleaseRequest(
+    new Request("http://local", { headers: { authorization: "Bearer 0123456789abcdef" } }),
+    env
+  ), true);
+  assert.equal(isAuthorizedReleaseRequest(
+    new Request("http://local", { headers: { authorization: "Bearer 0123456789abcdeg" } }),
+    env
+  ), false);
+  assert.equal(isAuthorizedReleaseRequest(
+    new Request("http://local", { headers: { cookie: "pi_auth=admin" } }),
+    env
+  ), false);
+  assert.equal(isAuthorizedReleaseRequest(
+    new Request("http://local", { headers: { authorization: "Bearer short" } }),
+    env
+  ), false);
+});
