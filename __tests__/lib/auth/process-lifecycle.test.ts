@@ -218,3 +218,29 @@ test("release token requires an exact constant-time Bearer match", async () => {
     env
   ), false);
 });
+
+test("release metadata requires the complete immutable manifest", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "pi-release-meta-"));
+  const { readReleaseMetadata } = await import("../../../lib/release-metadata.ts");
+  try {
+    writeFileSync(join(root, "release.json"), JSON.stringify({
+      releaseId: "20260713-160000-05816e7",
+      commit: "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86",
+      builtAt: "2026-07-13T08:00:00.000Z",
+      nodeVersion: "v22.20.0",
+      appVersion: "0.6.12",
+      piVersion: "0.75.5",
+    }));
+    assert.deepEqual(readReleaseMetadata(root), {
+      releaseId: "20260713-160000-05816e7",
+      commit: "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86",
+    });
+    writeFileSync(join(root, "release.json"), "{}");
+    assert.equal(readReleaseMetadata(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
