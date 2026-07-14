@@ -6,11 +6,20 @@
 npm run dev   # port 8000
 ```
 
-Typecheck: `node_modules/.bin/tsc --noEmit`  
-Lint: `node node_modules/next/dist/bin/next lint`  
+Typecheck: `npm run typecheck`
+Lint: `npm run lint`
+Verify gate: `npm run verify` (`typecheck`, `lint`, auth/release/UI tests)
 **Never run `next build` during dev** — pollutes `.next/` and breaks `npm run dev`.
 
-Production publish after merging to `main`: back up `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent`, stop `pi-web-auth.service`, run `npm run build`, then start `pi-web-auth.service`. The user-level systemd service runs `next start -p 8000` from `/home/hsops/pi-web-auth`, so a restart alone keeps serving the old `.next/` build.
+## Production Release
+
+- Production runs the immutable standalone release at `/home/hsops/pi-web-auth-deploy/current`; it must not run `.next` from the source worktree.
+- Keep `/home/hsops/pi-web-auth` on clean `main`. A release build uses a temporary detached worktree, runs `npm ci`, `npm run verify`, standalone build, and isolated staging verification before production drain.
+- Normal publish: feature tests -> non-8000 user acceptance -> merge to `main` -> standalone build/staging verification -> online pre-backup -> explicit production approval -> `scripts/release-production.sh`.
+- The 60-second outage budget starts when drain is requested and includes draining, stopping, final rsync, final SQLite backup, and validation. The new release has a separate 30-second ready window and automatically rolls back to `previous` on failure.
+- The first legacy-to-standalone migration is the only exception: after explicit no-active-reply confirmation, its 60-second budget starts before `legacy_stop`; every standalone release must use drain.
+- Keep current plus three historical releases (four total) and seven verified data backups. Never delete `.incomplete-*`, failed staging releases, migration backups, or failure logs automatically.
+- Code rollback never restores user data. Use `scripts/restore-production-backup.sh`, which defaults to dry-run and requires the service to be stopped plus full backup-ID confirmation for `--apply`.
 
 ## Isolated Feature Development
 
@@ -18,7 +27,7 @@ Production publish after merging to `main`: back up `~/.pi-web-auth`, `~/pi-user
 - Create each feature on a separate branch and linked worktree. Use a dedicated `HOME` so `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent` resolve inside the isolated environment.
 - Run development and acceptance on a non-8000 port, for example `HOME=/home/hsops/.pi-feature-dev-home npm run dev -- -p 8144`.
 - Do not run `next build` in a development worktree. Use the dev server for implementation and acceptance.
-- Release sequence: tests pass -> user acceptance -> stop production -> back up production data -> merge into `main` -> run `npm run build` in `/home/hsops/pi-web-auth` -> start `pi-web-auth.service` -> verify port 8000 and preserved data.
+- Release sequence: tests pass -> non-8000 user acceptance -> merge into clean `main` -> build/stage standalone release -> online pre-backup -> explicit production approval -> release script -> verify port 8000 and preserved data counts.
 
 ## Admin Console And Roles
 
