@@ -22,10 +22,10 @@ main() {
 
   git -C "$SOURCE_ROOT" rev-parse --git-dir >/dev/null || die "release source is not a git worktree"
   local branch commit short_sha
-  branch=$(git -C "$SOURCE_ROOT" symbolic-ref --short HEAD)
   commit=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
   short_sha=${commit:0:7}
   if [[ "$test_mode" != true ]]; then
+    branch=$(git -C "$SOURCE_ROOT" symbolic-ref --short HEAD 2>/dev/null || true)
     [[ "$branch" == main ]] || die "release source must be clean main"
     [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain)" ]] || die "release source must be clean main"
   fi
