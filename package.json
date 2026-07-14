@@ -22,7 +22,7 @@
     "start": "next start -p 8000",
     "lint": "eslint .",
     "test:auth": "node --experimental-strip-types --test \"__tests__/lib/auth/**/*.test.ts\"",
-    "test:release": "node -e \"console.log('release tests are introduced in Task 2')\"",
+    "test:release": "node --experimental-strip-types --test \"__tests__/release/**/*.test.ts\"",
     "test:ui": "vitest run --config vitest.config.ts",
     "test": "npm run test:auth && npm run test:release && npm run test:ui",
     "typecheck:app": "tsc --noEmit -p tsconfig.json",

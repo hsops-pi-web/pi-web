@@ -200,7 +200,7 @@ test("dispose errors use the dispose phase", async () => {
 
 test("release token requires an exact constant-time Bearer match", async () => {
   const { isAuthorizedReleaseRequest } = await import("../../../lib/release-auth.ts");
-  const env = { PI_WEB_RELEASE_TOKEN: "0123456789abcdef" };
+  const env = { ...process.env, PI_WEB_RELEASE_TOKEN: "0123456789abcdef" };
   assert.equal(isAuthorizedReleaseRequest(
     new Request("http://local", { headers: { authorization: "Bearer 0123456789abcdef" } }),
     env
