@@ -15,6 +15,8 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": [
       ".pi/extensions/**/*",
+      "node_modules/ajv/**/*",
+      "node_modules/ajv-formats/**/*",
       "node_modules/@modelcontextprotocol/sdk/**/*",
       "node_modules/@z_ai/mcp-server/**/*",
       "node_modules/typebox/**/*",
