@@ -46,7 +46,11 @@ export function getAll(): RecentCwd[] {
     return valid.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   } catch (e) {
     console.warn("[recent-cwds] Failed to read from localStorage:", e);
-    // localStorage 不可用，降级为空数组
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // localStorage may be unavailable, so cleanup is best-effort.
+    }
     return [];
   }
 }

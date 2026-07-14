@@ -4,6 +4,13 @@ import path, { delimiter, join, resolve } from "path";
 import { cacheSessionPath, invalidateSessionPathCache } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 import {
+  abortAndShutdownSession,
+  getProcessLifecycle,
+  installProcessSignalHandlers,
+  ProcessDrainingError,
+  shutdownAgentSession,
+} from "./process-lifecycle";
+import {
   assertSessionCommandAllowed,
   createDeleteLock,
   createDeleteWindowAbortError,
@@ -20,6 +27,8 @@ export interface AgentEvent {
   type: string;
   [key: string]: unknown;
 }
+
+export { shutdownAgentSession };
 
 type EventListener = (event: AgentEvent) => void;
 
@@ -109,8 +118,10 @@ export class AgentSessionWrapper {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
+  private _shutdownPromise: Promise<void> | null = null;
+  public readonly inner: AgentSessionLike;
 
-  constructor(public readonly inner: AgentSessionLike) {}
+  constructor(inner: AgentSessionLike) { this.inner = inner; }
 
   // The cwd this session was created/opened with. Set by startRpcSession from
   // the value the caller already validated. Trusted for ownership checks on a
@@ -140,7 +151,11 @@ export class AgentSessionWrapper {
 
   private resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.destroy(), 10 * 60 * 1000);
+    this.idleTimer = setTimeout(() => {
+      void this.shutdown("quit").catch(() => {
+        process.stderr.write("Agent session idle shutdown failed\n");
+      });
+    }, 10 * 60 * 1000);
   }
 
   onEvent(listener: EventListener): () => void {
@@ -153,6 +168,20 @@ export class AgentSessionWrapper {
 
   onDestroy(cb: () => void): void {
     this.onDestroyCallback = cb;
+  }
+
+  isStreaming(): boolean { return this.inner.isStreaming; }
+
+  async abortForShutdown(): Promise<void> { await this.inner.abort(); }
+
+  shutdown(reason: "quit" = "quit"): Promise<void> {
+    void reason;
+    if (this._shutdownPromise) return this._shutdownPromise;
+    this._shutdownPromise = (async () => {
+      try { await shutdownAgentSession(this.inner); }
+      finally { this.destroy(); }
+    })();
+    return this._shutdownPromise;
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
@@ -241,7 +270,7 @@ export class AgentSessionWrapper {
 
         const newSessionId = SessionManager.open(newSessionFile, sessionDir).getSessionId();
         cacheSessionPath(newSessionId, newSessionFile);
-        this.destroy();
+        await this.shutdown("quit");
         return { cancelled: false, newSessionId };
       }
 
@@ -385,13 +414,7 @@ export async function withStartGuard<T>(cwd: string, body: () => Promise<T>): Pr
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
-  if (!globalThis.__piSessions) {
-    globalThis.__piSessions = new Map();
-    const cleanup = () => globalThis.__piSessions?.forEach((s) => s.destroy());
-    process.once("exit", cleanup);
-    process.once("SIGINT", cleanup);
-    process.once("SIGTERM", cleanup);
-  }
+  if (!globalThis.__piSessions) globalThis.__piSessions = new Map();
   return globalThis.__piSessions;
 }
 
@@ -408,14 +431,18 @@ export async function abortSessionsUnderCwd(rootDir: string): Promise<number> {
   const root = canon(rootDir);
   const registry = getRegistry();
   let count = 0;
-  for (const [id, wrapper] of Array.from(registry.entries())) {
+  let firstError: unknown = null;
+  for (const [, wrapper] of Array.from(registry.entries())) {
     const cwd = canon(wrapper.cwd || "");
     if (cwd !== root && !cwd.startsWith(root + path.sep)) continue;
-    await wrapper.send({ type: "abort" });
-    wrapper.destroy();
-    registry.delete(id);
+    try {
+      await abortAndShutdownSession(wrapper);
+    } catch (error) {
+      firstError ??= error;
+    }
     count++;
   }
+  if (firstError) throw firstError;
   return count;
 }
 
@@ -440,14 +467,20 @@ export async function startRpcSession(
   }
 
   const existing = registry.get(sessionId);
-  if (existing?.isAlive()) return { session: existing, realSessionId: sessionId };
+  if (existing?.isAlive()) {
+    getProcessLifecycle().assertAcceptingAgentCommands();
+    return { session: existing, realSessionId: sessionId };
+  }
 
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
 
   const startKey = deleteLock.nextKey("__start__");
+  const lifecycle = getProcessLifecycle();
+  const finishLifecycleStart = lifecycle.beginSessionStart();
 
   const starting = (async () => {
+    let wrapper: AgentSessionWrapper | undefined;
     try {
       const { SessionManager, getAgentDir, DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
       const agentDir = getAgentDir();
@@ -482,7 +515,7 @@ export async function startRpcSession(
       if (toolNames && toolNames.length > 0) setActiveTools(inner, toolNames);
       if (toolNames?.length === 0) inner.agent.state.systemPrompt = "";
 
-      const wrapper = new AgentSessionWrapper(inner);
+      wrapper = new AgentSessionWrapper(inner);
       wrapper.cwd = canonicalCwd;
       wrapper.start();
 
@@ -491,13 +524,7 @@ export async function startRpcSession(
       if (deleteLock.isCwdUnderDeletingRoot(canonicalCwd)) {
         let cleanupError: unknown = null;
         try {
-          wrapper.destroy();
-          await inner.abort();
-        } catch (error) {
-          cleanupError = error;
-        }
-        try {
-          inner.dispose?.();
+          await abortAndShutdownSession(wrapper);
         } catch (error) {
           cleanupError ??= error;
         }
@@ -513,11 +540,20 @@ export async function startRpcSession(
       }
 
       if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
-      wrapper.onDestroy(() => registry.delete(realSessionId));
+      lifecycle.assertAcceptingAgentCommands();
+      const unregisterLifecycle = lifecycle.register(wrapper);
+      wrapper.onDestroy(() => {
+        unregisterLifecycle();
+        registry.delete(realSessionId);
+      });
       registry.set(realSessionId, wrapper);
       return { session: wrapper, realSessionId };
+    } catch (error) {
+      if (wrapper && error instanceof ProcessDrainingError) await wrapper.shutdown("quit");
+      throw error;
     } finally {
       deleteLock.unregisterStart(startKey);
+      finishLifecycleStart();
     }
   })().finally(() => locks.delete(sessionId));
 
@@ -525,3 +561,5 @@ export async function startRpcSession(
   locks.set(sessionId, starting);
   return starting;
 }
+
+installProcessSignalHandlers();
