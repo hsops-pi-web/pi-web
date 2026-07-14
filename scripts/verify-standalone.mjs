@@ -139,7 +139,7 @@ try {
     sessionManager: SessionManager.inMemory(cwd),
     noTools: "builtin",
   }));
-  if (!session.getAllTools().some((tool) => tool.name.startsWith("zai_"))) {
+  if (!session.extensionRunner.getAllRegisteredTools().some((tool) => tool.definition.name.startsWith("zai_"))) {
     throw new Error("staging dynamic extension failed");
   }
   if (session.extensionRunner.hasHandlers("session_shutdown")) {
