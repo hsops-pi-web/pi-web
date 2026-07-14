@@ -23,6 +23,14 @@ export interface LifecycleClock {
   sleep(ms: number): Promise<void>;
 }
 
+interface ShutdownSession {
+  extensionRunner: {
+    hasHandlers(eventType: string): boolean;
+    emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;
+  };
+  dispose(): void;
+}
+
 export class ProcessDrainingError extends Error {
   constructor() {
     super("服务正在发布，请稍后重试");
@@ -35,6 +43,37 @@ export class SessionDisposeError extends Error {
     super("AgentSession dispose failed");
     this.name = "SessionDisposeError";
   }
+}
+
+export async function shutdownAgentSession(inner: ShutdownSession): Promise<void> {
+  let shutdownError: unknown = null;
+  try {
+    if (inner.extensionRunner.hasHandlers("session_shutdown")) {
+      await inner.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    }
+  } catch (error) {
+    shutdownError = error;
+  }
+
+  try {
+    inner.dispose();
+  } catch {
+    throw new SessionDisposeError();
+  }
+
+  if (shutdownError) throw shutdownError;
+}
+
+export async function abortAndShutdownSession(session: DrainableSession): Promise<void> {
+  let abortError: unknown = null;
+  try {
+    await session.abortForShutdown();
+  } catch (error) {
+    abortError = error;
+  }
+
+  await session.shutdown("quit");
+  if (abortError) throw abortError;
 }
 
 const defaultClock: LifecycleClock = {
@@ -79,9 +118,10 @@ export class ProcessLifecycle {
   }
 
   register(session: DrainableSession): () => void {
-    this.sessions.set(session.sessionId, session);
+    const sessionId = session.sessionId;
+    this.sessions.set(sessionId, session);
     return () => {
-      if (this.sessions.get(session.sessionId) === session) this.sessions.delete(session.sessionId);
+      if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId);
     };
   }
 

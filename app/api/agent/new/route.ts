@@ -8,6 +8,12 @@ import { setUserModelPreference } from "@/lib/auth/model-preferences";
 import { getUserModelPreference } from "@/lib/auth/model-preferences";
 import { applyNewSessionModel } from "@/lib/model-selection";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
+
+function drainingResponse() {
+  const admission = getProcessLifecycle().agentAdmission();
+  return admission.allowed ? null : NextResponse.json({ error: admission.error }, { status: admission.status, headers: { "Retry-After": admission.retryAfter } });
+}
 
 function expandHomePath(path: string): string {
   if (path === "~") return homedir();
@@ -19,6 +25,8 @@ function expandHomePath(path: string): string {
 // Spawns a brand-new pi session and immediately sends the first command.
 // Returns { sessionId, data } where sessionId is pi's real session id.
 export async function POST(req: Request) {
+  const rejected = drainingResponse();
+  if (rejected) return rejected;
   try {
     const username = getSessionUser(req);
     if (!username) return NextResponse.json({ error: "未登录" }, { status: 401 });
@@ -45,6 +53,7 @@ export async function POST(req: Request) {
       ? storedPreference
       : null;
     const payload = await withStartGuard(cwd, async () => {
+      getProcessLifecycle().assertAcceptingAgentCommands();
       mkdirSync(cwd, { recursive: true });
       const tempKey = `__new__${Date.now()}`;
       const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
@@ -65,6 +74,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(payload);
   } catch (error) {
+    if (error instanceof ProcessDrainingError) return NextResponse.json({ error: error.message }, { status: 503, headers: { "Retry-After": "5" } });
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }

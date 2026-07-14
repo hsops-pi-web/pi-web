@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  abortAndShutdownSession,
   ProcessDrainingError,
   ProcessLifecycle,
   SessionDisposeError,
+  shutdownAgentSession,
   type DrainableSession,
   type LifecycleClock,
 } from "../../../lib/process-lifecycle.ts";
@@ -40,6 +42,42 @@ function session(
     async shutdown() { this.shutdowns++; },
   };
 }
+
+test("agent shutdown emits quit once, then disposes once", async () => {
+  const calls: string[] = [];
+  await shutdownAgentSession({
+    extensionRunner: {
+      hasHandlers: () => true,
+      emit: async (event: { type: string; reason: string }) => {
+        calls.push(`${event.type}:${event.reason}`);
+      },
+    },
+    dispose: () => calls.push("dispose"),
+  });
+  assert.deepEqual(calls, ["session_shutdown:quit", "dispose"]);
+});
+
+test("dispose still runs when an extension shutdown handler fails", async () => {
+  let disposed = 0;
+  await assert.rejects(() => shutdownAgentSession({
+    extensionRunner: {
+      hasHandlers: () => true,
+      emit: async () => { throw new Error("extension failed"); },
+    },
+    dispose: () => { disposed += 1; },
+  }));
+  assert.equal(disposed, 1);
+});
+
+test("abort failure still shuts the session down", async () => {
+  const managed = session("abort-failure", true);
+  managed.abortForShutdown = async () => {
+    throw new Error("abort failed");
+  };
+
+  await assert.rejects(() => abortAndShutdownSession(managed), /abort failed/);
+  assert.equal(managed.shutdowns, 1);
+});
 
 test("admission rejects while draining", async () => {
   const lifecycle = new ProcessLifecycle(clock().value);
@@ -107,6 +145,19 @@ test("drain is strictly idempotent", async () => {
   await first;
   assert.strictEqual(lifecycle.drain(), first);
   assert.equal(managed.shutdowns, 1);
+});
+
+test("unregister uses the session id captured before a fork mutates it", async () => {
+  const lifecycle = new ProcessLifecycle(clock().value);
+  const managed = session("before-fork");
+  const unregister = lifecycle.register(managed);
+
+  managed.sessionId = "after-fork";
+  unregister();
+
+  const result = await lifecycle.drain({ graceMs: 0 });
+  assert.equal(result.sessionCount, 0);
+  assert.equal(managed.shutdowns, 0);
 });
 
 test("pending starts can register before the barrier closes", async () => {

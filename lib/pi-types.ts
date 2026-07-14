@@ -31,6 +31,10 @@ export interface AgentSessionLike {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
   readonly isStreaming: boolean;
+  readonly extensionRunner: {
+    hasHandlers(eventType: string): boolean;
+    emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;
+  };
   readonly isCompacting: boolean;
   readonly autoCompactionEnabled: boolean;
   readonly autoRetryEnabled: boolean;
@@ -59,5 +63,5 @@ export interface AgentSessionLike {
   setActiveToolsByName(names: string[]): void;
   abortCompaction(): void;
   getContextUsage(): ContextUsage | undefined;
-  dispose?(): void;
+  dispose(): void;
 }

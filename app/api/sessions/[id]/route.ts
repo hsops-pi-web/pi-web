@@ -7,7 +7,13 @@ import {
   buildSessionContext,
   listAllSessions,
 } from "@/lib/session-reader";
-import { getRpcSession } from "@/lib/rpc-manager";
+import {
+  getRpcSession,
+  markRootDeleting,
+  unmarkRootDeleting,
+  waitForStartsUnderRoot,
+  withCwdOperationGuard,
+} from "@/lib/rpc-manager";
 import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 
 function ownershipDenied(status: 401 | 404): Response {
@@ -93,8 +99,10 @@ export async function PATCH(
     const guard = await checkSessionOwnership(req, id);
     if (!guard.ok) return ownershipDenied(guard.status);
 
-    const sm = SessionManager.open(guard.filePath);
-    sm.appendSessionInfo(name.trim());
+    await withCwdOperationGuard(guard.cwd, async () => {
+      const sm = SessionManager.open(guard.filePath);
+      sm.appendSessionInfo(name.trim());
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -111,40 +119,46 @@ export async function DELETE(
     const guard = await checkSessionOwnership(req, id);
     if (!guard.ok) return ownershipDenied(guard.status);
     const filePath = guard.filePath;
-
-    // Read header before deleting to get parentSession path
-    const firstLine = readFileSync(filePath, "utf8").split("\n")[0];
-    let parentSessionPath: string | undefined;
+    markRootDeleting(guard.cwd);
     try {
-      const header = JSON.parse(firstLine) as { type?: string; parentSession?: string };
-      if (header.type === "session") parentSessionPath = header.parentSession;
-    } catch { /* ignore */ }
+      await waitForStartsUnderRoot(guard.cwd);
 
-    // Re-attach all direct children to this session's parent (cascade re-parent)
-    // Scan sibling files in the same directory
-    const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-    try {
-      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && join(dir, f) !== filePath);
-      for (const file of files) {
-        const childPath = join(dir, file);
-        try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
-          if (header.type === "session" && header.parentSession === filePath) {
-            // Rewrite header with new parentSession
-            header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
-            writeFileSync(childPath, lines.join("\n"));
-          }
-        } catch { /* skip malformed */ }
-      }
-    } catch { /* skip if dir unreadable */ }
+      // Read header before deleting to get parentSession path
+      const firstLine = readFileSync(filePath, "utf8").split("\n")[0];
+      let parentSessionPath: string | undefined;
+      try {
+        const header = JSON.parse(firstLine) as { type?: string; parentSession?: string };
+        if (header.type === "session") parentSessionPath = header.parentSession;
+      } catch { /* ignore */ }
 
-    getRpcSession(id)?.destroy();
-    unlinkSync(filePath);
-    invalidateSessionPathCache(id);
-    return NextResponse.json({ ok: true });
+      // Re-attach all direct children to this session's parent (cascade re-parent)
+      // Scan sibling files in the same directory
+      const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+      try {
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && join(dir, f) !== filePath);
+        for (const file of files) {
+          const childPath = join(dir, file);
+          try {
+            const content = readFileSync(childPath, "utf8");
+            const lines = content.split("\n");
+            const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
+            if (header.type === "session" && header.parentSession === filePath) {
+              // Rewrite header with new parentSession
+              header.parentSession = parentSessionPath;
+              lines[0] = JSON.stringify(header);
+              writeFileSync(childPath, lines.join("\n"));
+            }
+          } catch { /* skip malformed */ }
+        }
+      } catch { /* skip if dir unreadable */ }
+
+      await getRpcSession(id)?.shutdown("quit");
+      unlinkSync(filePath);
+      invalidateSessionPathCache(id);
+      return NextResponse.json({ ok: true });
+    } finally {
+      unmarkRootDeleting(guard.cwd);
+    }
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

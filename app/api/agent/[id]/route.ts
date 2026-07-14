@@ -8,12 +8,20 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
 import { setUserModelPreference } from "@/lib/auth/model-preferences";
 import { switchModelAndRemember } from "@/lib/model-selection";
+import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
+
+function drainingResponse() {
+  const admission = getProcessLifecycle().agentAdmission();
+  return admission.allowed ? null : NextResponse.json({ error: admission.error }, { status: admission.status, headers: { "Retry-After": admission.retryAfter } });
+}
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rejected = drainingResponse();
+  if (rejected) return rejected;
   const { id } = await params;
 
   const guard = await checkSessionOwnership(req, id);
@@ -30,6 +38,7 @@ export async function POST(
       : SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
 
     const result = await withCwdOperationGuard(cwd, async () => {
+      getProcessLifecycle().assertAcceptingAgentCommands();
       let session = getRpcSession(id);
       if (!session?.isAlive()) {
         const started = await startRpcSession(id, guard.filePath, cwd);
@@ -54,6 +63,7 @@ export async function POST(
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
+    if (error instanceof ProcessDrainingError) return NextResponse.json({ error: error.message }, { status: 503, headers: { "Retry-After": "5" } });
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
