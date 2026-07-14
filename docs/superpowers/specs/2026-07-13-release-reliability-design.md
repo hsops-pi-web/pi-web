@@ -1,6 +1,7 @@
 # 生产发布可靠性与质量门禁设计
 
 日期：2026-07-13
+修订：2026-07-14（确认首次迁移一次性 legacy stop 例外）
 分支：`feat/release-reliability`
 生产源码：`/home/hsops/pi-web-auth`，`main`，端口 8000
 设计 worktree：`/home/hsops/pi-web-auth-release-reliability`
@@ -60,6 +61,9 @@
 - 保留 3 个历史 release 和 7 份已验证数据备份。
 - 引入 Vitest + jsdom，保留 node:test，两组都进入统一门禁。
 - 首次迁移连续成功发布两次前，保留原 systemd unit 和原 `.next` 回滚路径。
+- 当前 legacy commit `05816e7` 没有 drain/lifecycle 能力；首次切换允许一次性 legacy stop
+  例外，要求操作者确认无活跃回复并显式确认目标 release。第一个 standalone 上线后不得再使用
+  该例外。
 
 ## 4. 目录与不可变产物
 
@@ -168,7 +172,7 @@ token 存放在 `/home/hsops/.config/pi-web-auth/release.env`，文件权限必�
 - SQLite 在线一致性快照
 - `~/.pi/agent`、`~/pi-users` 和认证数据目录的大文件预复制
 
-发布脚本调用 drain 时开始单调时钟计时。以下步骤共享 60 秒：
+普通 standalone 发布在调用 drain 时开始单调时钟计时。以下步骤共享 60 秒：
 
 1. 拒绝新聊天命令。
 2. 等待活跃回复，最多 30 秒。
@@ -184,6 +188,13 @@ token 存放在 `/home/hsops/.config/pi-web-auth/release.env`，文件权限必�
 
 正常无活跃回复且增量较小时，预期实际中断为 2 至 5 秒；30 秒是活跃回复宽限，不是每次
 发布固定等待。失败场景最坏可见中断还会叠加旧版本恢复时间。
+
+首次迁移是唯一例外：当前运行的 legacy `.next` 不包含本设计新增的 drain API、写请求门禁、
+`session_shutdown` 或 dispose，已经运行的 Node 进程也不能动态注入这些能力。首次迁移必须在
+维护窗口由操作者确认没有活跃回复，并同时提供 `--allow-legacy-stop` 与完整目标 release ID；
+60 秒从调用 `systemctl stop` 旧 unit 前开始。旧 unit 可能使用现有 20 秒 stop guard 并被
+SIGKILL，日志必须标记 `legacy_stop`，不得记录为成功 drain。最终增量备份、校验、失败恢复
+旧 unit/`.next` 和新版本 30 秒 ready 窗口仍按本设计执行。
 
 ## 8. 数据备份
 
@@ -272,12 +283,17 @@ release 脚本在调用 systemctl stop 前主动完成 drain。ExecStop 是管�
 
 1. 备份当前用户 unit、源码 commit 和旧 `.next`。
 2. 构建并 staging 验证第一个 standalone release。
-3. 生成新 unit，但保留可一键恢复的原 unit 文件。
-4. 完成 drain、备份和停止后安装新 unit并指向第一个 `current`。
-5. 第一次启动失败时恢复原 unit 和旧 `.next`，从源码目录启动旧方式。
-6. 连续两次 standalone 发布和回滚演练成功前，不允许删除首次迁移备份。
+3. 完成在线预备份，要求操作者显式传入 `--allow-legacy-stop` 和
+   `--confirm-no-active-replies <release-id>`；确认值必须与目标 manifest 完全一致。
+4. 在调用 legacy `systemctl stop` 前开始 60 秒计时，不调用旧进程不存在的 drain API；日志
+   阶段固定为 `legacy_stop`。
+5. 停止后完成最终增量备份与校验，仍在预算内才安装新 unit 并指向第一个 `current`。
+6. 第一次启动失败时恢复原 unit 和旧 `.next`，从源码目录启动旧方式。
+7. 连续两次 standalone 发布和回滚演练成功前，不允许删除首次迁移备份。
 
 首次迁移是单独验收步骤，不与普通后续发布路径混为一个不可测试分支。
+额外执行一次 bootstrap restart 仍然需要先停止同一个无 drain 的旧进程，因此不能消除上述
+一次性例外。
 
 ## 13. 质量门禁
 
@@ -330,7 +346,9 @@ package scripts 统一为：
 - 只清理未被引用的旧 release，并保留当前加 3 个历史版本。
 - 只清理超过 7 份的成功备份，不删除 incomplete 目录。
 - 并发发布被锁拒绝。
-- 首次迁移失败恢复原 unit 和旧 `.next`。
+- 首次迁移不调用不存在的 drain API；缺少任一显式确认时在 stop 前失败。
+- 首次迁移失败恢复原 unit 和旧 `.next`，且后续普通发布不能启用 legacy stop 例外。
+- 普通发布入口收到任何 legacy stop 参数时在 build 前失败。
 
 standalone staging 验收覆盖：
 
@@ -347,16 +365,19 @@ standalone staging 验收覆盖：
 ```text
 lib/process-lifecycle.ts
 lib/release-auth.ts
+lib/release-metadata.ts
 app/api/internal/drain/route.ts
 app/api/internal/resume/route.ts
 app/api/health/live/route.ts
 app/api/health/ready/route.ts
 scripts/lib/release-common.sh
 scripts/build-release.sh
+scripts/verify-standalone.mjs
 scripts/release-production.sh
 scripts/backup-production.mjs
 scripts/restore-production-backup.sh
 scripts/systemd-stop.sh
+scripts/migrate-first-release.sh
 systemd/pi-web-auth.service
 vitest.config.ts
 tsconfig.tests.json
@@ -371,8 +392,11 @@ docs/operations/production-rollback.md
 
 ```text
 lib/rpc-manager.ts
+lib/pi-types.ts
 app/api/agent/new/route.ts
 app/api/agent/[id]/route.ts
+app/api/sessions/[id]/route.ts
+middleware.ts
 next.config.ts
 package.json
 package-lock.json
@@ -396,6 +420,7 @@ AGENTS.md
 - pre-backup、drain、stop、finalize backup
 - symlink switch、start、health check、rollback、retention
 - 活跃会话数、自然结束数、abort 数和 shutdown 错误数
+- 首次迁移单独记录 `legacy_stop` 和实际 stop 耗时，不伪造 drain/session shutdown 指标
 
 日志对 token、cookie、API Key 和请求正文做禁止输出约束。脚本默认 `umask 077`。失败时日志
 明确写出当前软链接目标、服务状态和建议恢复命令，但不自动删除诊断现场。
@@ -407,12 +432,14 @@ AGENTS.md
 1. `npm ci && npm run verify` 无错误通过，不再过滤 tsc 输出。
 2. isolated staging standalone 能加载 Pi AgentSession 和 `.pi/extensions`。
 3. 使用模拟活跃会话验证 30 秒宽限和 abort 路径。
-4. drain、停止、最终增量备份和校验在测试数据下不超过 60 秒。
+4. 普通发布的 drain、停止、最终增量备份和校验在测试数据下不超过 60 秒；首次迁移从
+   legacy stop 到最终校验不超过 60 秒。
 5. 新版本健康检查失败能自动恢复 previous。
-6. 首次迁移失败能恢复原 unit 和旧 `.next`。
+6. 首次迁移缺少显式确认时不停止服务；确认后的迁移失败能恢复原 unit 和旧 `.next`。
 7. 发布前后用户数、登录会话数、模型偏好数和 Pi jsonl 数一致。
 8. 生产 `/api/health/ready` 连续 3 次 200，8000 登录、管理员和普通用户权限烟测通过。
-9. 直接 `systemctl --user stop pi-web-auth.service` 在 65 秒内正常退出，不出现 SIGKILL。
+9. standalone 上线后直接 `systemctl --user stop pi-web-auth.service` 在 65 秒内正常退出，
+   不出现 SIGKILL；此标准不追溯适用于一次性 legacy stop。
 10. release 和 backup 保留策略在真实目录验证无误。
 
 ## 18. 后续阶段
