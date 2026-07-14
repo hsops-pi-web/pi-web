@@ -8,12 +8,13 @@ Use this when the current standalone release is bad but `previous` is known heal
 
 ```bash
 systemctl --user stop pi-web-auth.service
-readlink -f /home/hsops/pi-web-auth-deploy/current
-readlink -f /home/hsops/pi-web-auth-deploy/previous
-cat /home/hsops/pi-web-auth-deploy/previous/release.json
-ln -sfn /home/hsops/pi-web-auth-deploy/current /home/hsops/pi-web-auth-deploy/current.tmp.rollback
-mv -Tf /home/hsops/pi-web-auth-deploy/current.tmp.rollback /home/hsops/pi-web-auth-deploy/previous
-ln -sfn "$(readlink -f /home/hsops/pi-web-auth-deploy/previous)" /home/hsops/pi-web-auth-deploy/current.tmp
+OLD_CURRENT=$(readlink -f /home/hsops/pi-web-auth-deploy/current)
+OLD_PREVIOUS=$(readlink -f /home/hsops/pi-web-auth-deploy/previous)
+test -f "$OLD_PREVIOUS/release.json"
+cat "$OLD_PREVIOUS/release.json"
+ln -sfn "$OLD_CURRENT" /home/hsops/pi-web-auth-deploy/previous.tmp
+mv -Tf /home/hsops/pi-web-auth-deploy/previous.tmp /home/hsops/pi-web-auth-deploy/previous
+ln -sfn "$OLD_PREVIOUS" /home/hsops/pi-web-auth-deploy/current.tmp
 mv -Tf /home/hsops/pi-web-auth-deploy/current.tmp /home/hsops/pi-web-auth-deploy/current
 systemctl --user start pi-web-auth.service
 ```
