@@ -18,6 +18,7 @@ const nextConfig: NextConfig = {
       "node_modules/@modelcontextprotocol/sdk/**/*",
       "node_modules/@z_ai/mcp-server/**/*",
       "node_modules/typebox/**/*",
+      "node_modules/zod/**/*",
     ],
   },
   serverExternalPackages: [
