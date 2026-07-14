@@ -29,6 +29,19 @@ backup_command() {
   "${BACKUP_COMMAND[@]}" "$@"
 }
 
+record_standalone_success() {
+  local status_file="$DEPLOY_ROOT/migration/status.json"
+  [[ -f "$status_file" ]] || return 0
+  "$NODE_BIN" -e '
+    const fs=require("node:fs");
+    const path=process.argv[1], value=JSON.parse(fs.readFileSync(path,"utf8"));
+    value.standaloneSuccesses=Number(value.standaloneSuccesses||0)+1;
+    const temp=`${path}.tmp`;
+    fs.writeFileSync(temp,JSON.stringify(value,null,2)+"\n",{mode:0o600});
+    fs.renameSync(temp,path);
+  ' "$status_file"
+}
+
 read_manifest() {
   "$NODE_BIN" -e '
     const fs=require("node:fs");
@@ -174,6 +187,13 @@ main() {
   wait_ready "$RELEASE_ID" "$commit" 30
   json_log health-check success "$(( $(now_ms) - phase_started ))" "three-consecutive-ready"
   release_succeeded=true
+
+  phase_started=$(now_ms)
+  if record_standalone_success; then
+    json_log migration-status success "$(( $(now_ms) - phase_started ))" "standalone-success-recorded"
+  else
+    json_log migration-status warning "$(( $(now_ms) - phase_started ))" "manual-status-update-required"
+  fi
 
   phase_started=$(now_ms)
   if backup_command retention --backup-root "$BACKUP_ROOT" >/dev/null && prune_releases; then

@@ -1,0 +1,24 @@
+[Unit]
+Description=Pi Agent Web (standalone release, 8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/hsops/pi-web-auth-deploy/current
+EnvironmentFile=/home/hsops/.config/pi-web-auth/release.env
+Environment=NODE_ENV=production
+Environment=HOME=/home/hsops
+Environment=PORT=8000
+Environment=HOSTNAME=0.0.0.0
+Environment=PATH=/home/hsops/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
+ExecStop=/home/hsops/pi-web-auth-deploy/current/scripts/systemd-stop.sh
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=65
+SyslogIdentifier=pi-web-auth
+
+[Install]
+WantedBy=default.target

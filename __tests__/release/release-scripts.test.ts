@@ -14,7 +14,7 @@ import {
   mkdtempSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 const roots: string[] = [];
@@ -409,4 +409,151 @@ test("release retention preserves current and previous and keeps four total", ()
     fixture.historyNames.at(-1),
     fixture.historyNames.at(-2),
   ].sort());
+});
+
+function firstMigrationFixture() {
+  const root = tempRoot();
+  const source = join(root, "source");
+  const deploy = join(root, "deploy");
+  const releaseId = "20260713-170000-4444444";
+  const commit = "4".repeat(40);
+  const release = join(deploy, "releases", releaseId);
+  const home = join(root, "home");
+  const bin = join(root, "bin");
+  const installedUnit = join(root, "systemd", "pi-web-auth.service");
+  const envFile = join(root, "release.env");
+  const eventsPath = join(root, "events");
+  const nowPath = join(root, "now");
+  mkdirSync(join(source, ".next"), { recursive: true });
+  mkdirSync(join(home, ".pi-web-auth"), { recursive: true });
+  mkdirSync(join(home, "pi-users"), { recursive: true });
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  mkdirSync(dirname(installedUnit), { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(source, "tracked.txt"), "source\n");
+  writeFileSync(join(source, ".next", "build.txt"), "legacy-build\n");
+  for (const args of [["init"], ["config", "user.email", "release@test"], ["config", "user.name", "Release Test"], ["add", "tracked.txt"], ["commit", "-m", "fixture"]]) {
+    const result = spawnSync("git", args, { cwd: source, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  writeManifest(release, releaseId, commit, 10_000);
+  mkdirSync(join(release, "scripts"), { recursive: true });
+  writeFileSync(join(release, "server.js"), "// fixture\n");
+  writeFileSync(installedUnit, `[Service]\nWorkingDirectory=${source}\nEnvironment=REGISTER_KEYWORD=legacy-key\n`);
+  writeFileSync(eventsPath, "");
+  writeFileSync(nowPath, "1000\n");
+
+  const disk = join(bin, "disk-check");
+  executable(disk, `printf 'disk-check\n' >> "$PI_WEB_TEST_EVENTS"`);
+  const backup = join(bin, "backup");
+  executable(backup, `printf 'backup:%s\n' "$1" >> "$PI_WEB_TEST_EVENTS"`);
+  const openssl = join(bin, "openssl");
+  executable(openssl, `printf '%064d\n' 0`);
+  const now = join(bin, "now");
+  executable(now, `cat "$PI_WEB_TEST_NOW"`);
+  const sleep = join(bin, "sleep");
+  executable(sleep, `value=$(cat "$PI_WEB_TEST_NOW"); printf '%s\n' "$((value + 1000))" > "$PI_WEB_TEST_NOW"`);
+  const systemctl = join(bin, "systemctl");
+  executable(systemctl, `
+action=$2
+if [[ "$action" == daemon-reload ]]; then printf 'daemon-reload\n' >> "$PI_WEB_TEST_EVENTS"; exit 0; fi
+if grep -q 'pi-web-auth-deploy/current' "$PI_WEB_TEST_INSTALLED_UNIT"; then mode=new; else mode=old; fi
+printf '%s-%s\n' "$action" "$mode" >> "$PI_WEB_TEST_EVENTS"
+`);
+  const curl = join(bin, "curl");
+  executable(curl, `
+config=$(cat || true); args="$* $config"
+if [[ "$args" == *'/api/internal/drain'* ]]; then printf 'drain\n' >> "$PI_WEB_TEST_EVENTS"; printf '{}\n'; exit 0; fi
+if [[ "$args" == *'/api/internal/resume'* ]]; then printf 'resume\n' >> "$PI_WEB_TEST_EVENTS"; exit 0; fi
+if [[ "$args" == *'/api/health/ready'* ]]; then
+  [[ -e "$PI_WEB_TEST_ROOT/health-seen" ]] || { touch "$PI_WEB_TEST_ROOT/health-seen"; printf 'health-new\n' >> "$PI_WEB_TEST_EVENTS"; }
+  exit 22
+fi
+if [[ "$args" == *'/login'* ]]; then printf 'login-old\n' >> "$PI_WEB_TEST_EVENTS"; printf '<html></html>\n'; exit 0; fi
+exit 2
+`);
+
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "test",
+    HOME: home,
+    PI_WEB_SOURCE_ROOT: source,
+    PI_WEB_DEPLOY_ROOT: deploy,
+    PI_WEB_BACKUP_ROOT: join(root, "backups"),
+    PI_WEB_PRODUCTION_HOME: home,
+    PI_WEB_INSTALLED_UNIT: installedUnit,
+    PI_WEB_UNIT_TEMPLATE: resolve("systemd/pi-web-auth.service"),
+    PI_WEB_RELEASE_ENV: envFile,
+    PI_WEB_LEGACY_NEXT: join(source, ".next"),
+    PI_WEB_MIGRATION_ROOT: join(deploy, "migration"),
+    PI_WEB_BACKUP_BIN: backup,
+    PI_WEB_DISK_CHECK_BIN: disk,
+    PI_WEB_OPENSSL_BIN: openssl,
+    PI_WEB_SYSTEMCTL_BIN: systemctl,
+    PI_WEB_CURL_BIN: curl,
+    PI_WEB_NOW_BIN: now,
+    PI_WEB_SLEEP_BIN: sleep,
+    PI_WEB_NODE_BIN: process.execPath,
+    PI_WEB_TEST_EVENTS: eventsPath,
+    PI_WEB_TEST_NOW: nowPath,
+    PI_WEB_TEST_INSTALLED_UNIT: installedUnit,
+    PI_WEB_TEST_ROOT: root,
+  };
+  return {
+    installedUnit,
+    hashLegacyNext: () => readFileSync(join(source, ".next", "build.txt"), "utf8"),
+    events: () => readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean),
+    run: () => spawnSync("bash", [
+      "scripts/migrate-first-release.sh",
+      "--release", release,
+      "--allow-legacy-stop",
+      "--confirm-no-active-replies", releaseId,
+    ], { cwd: resolve("."), env: environment, encoding: "utf8" }),
+    runWithoutConfirmation: () => spawnSync("bash", [
+      "scripts/migrate-first-release.sh",
+      "--release", release,
+    ], { cwd: resolve("."), env: environment, encoding: "utf8" }),
+  };
+}
+
+test("standalone unit preserves production environment and stop guards", () => {
+  const unit = readFileSync("systemd/pi-web-auth.service", "utf8");
+  assert.match(unit, /WorkingDirectory=\/home\/hsops\/pi-web-auth-deploy\/current/);
+  assert.match(unit, /EnvironmentFile=\/home\/hsops\/\.config\/pi-web-auth\/release\.env/);
+  assert.match(unit, /Environment=HOME=\/home\/hsops/);
+  assert.match(unit, /Environment=PORT=8000/);
+  assert.match(unit, /Environment=HOSTNAME=0\.0\.0\.0/);
+  assert.match(unit, /ExecStart=.*node \/home\/hsops\/pi-web-auth-deploy\/current\/server\.js/);
+  assert.match(unit, /ExecStop=.*current\/scripts\/systemd-stop\.sh/);
+  assert.match(unit, /TimeoutStopSec=65/);
+});
+
+test("first migration failure restores the original unit and legacy next", () => {
+  const fixture = firstMigrationFixture();
+  const beforeUnit = readFileSync(fixture.installedUnit, "utf8");
+  const beforeNext = fixture.hashLegacyNext();
+  const result = fixture.run();
+  assert.notEqual(result.status, 0);
+  assert.equal(readFileSync(fixture.installedUnit, "utf8"), beforeUnit);
+  assert.equal(fixture.hashLegacyNext(), beforeNext);
+  assert.deepEqual(fixture.events(), [
+    "disk-check",
+    "backup:prepare",
+    "stop-old",
+    "backup:finalize",
+    "daemon-reload",
+    "start-new",
+    "health-new",
+    "stop-new",
+    "daemon-reload",
+    "start-old",
+    "login-old",
+  ]);
+});
+
+test("first migration refuses to stop legacy without both explicit confirmations", () => {
+  const fixture = firstMigrationFixture();
+  const result = fixture.runWithoutConfirmation();
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(fixture.events(), []);
 });
