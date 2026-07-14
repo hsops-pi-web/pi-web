@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
+  existsSync,
   chmodSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
   mkdtempSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -62,6 +67,7 @@ test("release shell files pass bash syntax validation", () => {
   for (const script of [
     "scripts/lib/release-common.sh",
     "scripts/build-release.sh",
+    "scripts/release-production.sh",
     "scripts/systemd-stop.sh",
   ]) {
     const result = spawnSync("bash", ["-n", script], { encoding: "utf8" });
@@ -162,4 +168,245 @@ test("retention keeps seven verified backups and every incomplete directory", ()
   assert.equal(readFileSync(join(backupRoot, "backup-09", "backup.json"), "utf8").length > 0, true);
   assert.throws(() => readFileSync(join(backupRoot, "backup-01", "backup.json")));
   assert.equal(readFileSync(join(backupRoot, ".incomplete-keep", ".keep"), "utf8"), "keep");
+});
+
+function writeManifest(path: string, releaseId: string, commit: string, mtime: number): void {
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "release.json"), JSON.stringify({
+    releaseId,
+    commit,
+    builtAt: new Date(mtime).toISOString(),
+    nodeVersion: process.version,
+    appVersion: "0.6.12",
+    piVersion: "0.75.5",
+  }));
+  const date = new Date(mtime);
+  utimesSync(path, date, date);
+}
+
+function releaseFixture(scenario: string, options: { existingReleases?: number } = {}) {
+  const root = tempRoot();
+  const deploy = join(root, "deploy");
+  const releases = join(deploy, "releases");
+  const backups = join(root, "backups");
+  const home = join(root, "home");
+  const bin = join(root, "bin");
+  const eventsPath = join(root, "events");
+  const nowPath = join(root, "now");
+  const healthCountPath = join(root, "health-count");
+  const envFile = join(root, "release.env");
+  mkdirSync(releases, { recursive: true });
+  mkdirSync(backups, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(eventsPath, "");
+  writeFileSync(nowPath, "1000\n");
+  writeFileSync(healthCountPath, "0\n");
+  writeFileSync(envFile, "PI_WEB_RELEASE_TOKEN=test-release-token\nREGISTER_KEYWORD=test-register\n", { mode: 0o600 });
+
+  const oldName = "20260713-120000-1111111";
+  const previousName = "20260712-120000-2222222";
+  const newName = "20260713-160000-3333333";
+  const oldCommit = "1".repeat(40);
+  const previousCommit = "2".repeat(40);
+  const newCommit = "3".repeat(40);
+  const oldRelease = join(releases, oldName);
+  const initialPrevious = join(releases, previousName);
+  const newRelease = join(releases, newName);
+  writeManifest(initialPrevious, previousName, previousCommit, 1_000);
+  writeManifest(oldRelease, oldName, oldCommit, 2_000);
+  writeManifest(newRelease, newName, newCommit, 10_000);
+  symlinkSync(oldRelease, join(deploy, "current"));
+  symlinkSync(initialPrevious, join(deploy, "previous"));
+
+  const historyNames: string[] = [];
+  for (let index = 0; index < (options.existingReleases ?? 0); index += 1) {
+    const name = `202607${String(index + 1).padStart(2, "0")}-010101-${String(index + 4).repeat(7).slice(0, 7)}`;
+    historyNames.push(name);
+    writeManifest(join(releases, name), name, String(index + 4).repeat(40).slice(0, 40), 3_000 + index * 100);
+  }
+
+  const build = join(bin, "build-release");
+  executable(build, `
+printf 'build\n' >> "$PI_WEB_TEST_EVENTS"
+case "$PI_WEB_TEST_SCENARIO" in verify-fails|staging-fails) exit 20;; esac
+printf '%s\n' "$PI_WEB_TEST_NEW_RELEASE"
+`);
+  const disk = join(bin, "disk-check");
+  executable(disk, `
+printf 'disk-check\n' >> "$PI_WEB_TEST_EVENTS"
+[[ "$PI_WEB_TEST_SCENARIO" != disk-full ]]
+`);
+  const backup = join(bin, "backup");
+  executable(backup, `
+command=$1
+if [[ "$command" == retention ]]; then
+  printf 'retention\n' >> "$PI_WEB_TEST_EVENTS"
+  exit 0
+fi
+printf 'backup:%s\n' "$command" >> "$PI_WEB_TEST_EVENTS"
+[[ "$PI_WEB_TEST_SCENARIO" == prebackup-fails && "$command" == prepare ]] && exit 21
+[[ "$PI_WEB_TEST_SCENARIO" == final-backup-fails && "$command" == finalize ]] && exit 22
+exit 0
+`);
+  const systemctl = join(bin, "systemctl");
+  executable(systemctl, `
+action=$2
+current=$(readlink -f "$PI_WEB_DEPLOY_ROOT/current")
+if [[ "$action" == stop ]]; then
+  [[ "$current" == "$PI_WEB_TEST_NEW_RELEASE" ]] && event=stop-new || event=stop
+elif [[ "$action" == start ]]; then
+  [[ "$current" == "$PI_WEB_TEST_NEW_RELEASE" ]] && event=start-new || event=start-old
+else
+  exit 0
+fi
+printf '%s\n' "$event" >> "$PI_WEB_TEST_EVENTS"
+`);
+  const now = join(bin, "now");
+  executable(now, `cat "$PI_WEB_TEST_NOW"`);
+  const sleep = join(bin, "sleep");
+  executable(sleep, `
+value=$(cat "$PI_WEB_TEST_NOW")
+printf '%s\n' "$((value + 1000))" > "$PI_WEB_TEST_NOW"
+`);
+  const curl = join(bin, "curl");
+  executable(curl, `
+config=$(cat)
+args="$* $config"
+if [[ "$args" == *'/api/internal/drain'* ]]; then
+  printf 'drain\n' >> "$PI_WEB_TEST_EVENTS"
+  [[ "$PI_WEB_TEST_SCENARIO" == budget-exhausted ]] && printf '61001\n' > "$PI_WEB_TEST_NOW"
+  printf '{"state":"shutting_down","errors":[]}\n'
+  exit 0
+fi
+if [[ "$args" == *'/api/internal/resume'* ]]; then
+  printf 'resume\n' >> "$PI_WEB_TEST_EVENTS"
+  printf '{"state":"running"}\n'
+  exit 0
+fi
+if [[ "$args" == *'/api/health/ready'* ]]; then
+  current=$(readlink -f "$PI_WEB_DEPLOY_ROOT/current")
+  if [[ "$current" == "$PI_WEB_TEST_NEW_RELEASE" ]]; then
+    marker="$PI_WEB_TEST_ROOT/health-new-seen"
+    [[ -e "$marker" ]] || { touch "$marker"; printf 'health-new\n' >> "$PI_WEB_TEST_EVENTS"; }
+    [[ "$PI_WEB_TEST_SCENARIO" == new-health-fails ]] && exit 22
+    count=$(cat "$PI_WEB_TEST_HEALTH_COUNT")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$PI_WEB_TEST_HEALTH_COUNT"
+    case "$count" in 1|3) exit 22;; esac
+    printf '{"status":"ready","releaseId":"%s","commit":"%s"}\n' "$PI_WEB_TEST_NEW_ID" "$PI_WEB_TEST_NEW_COMMIT"
+    exit 0
+  fi
+  marker="$PI_WEB_TEST_ROOT/health-old-seen"
+  [[ -e "$marker" ]] || { touch "$marker"; printf 'health-old\n' >> "$PI_WEB_TEST_EVENTS"; }
+  printf '{"status":"ready","releaseId":"%s","commit":"%s"}\n' "$PI_WEB_TEST_OLD_ID" "$PI_WEB_TEST_OLD_COMMIT"
+  exit 0
+fi
+exit 2
+`);
+
+  let lockHolder: ReturnType<typeof spawn> | null = null;
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "test",
+    HOME: home,
+    PI_WEB_SOURCE_ROOT: resolve("."),
+    PI_WEB_DEPLOY_ROOT: deploy,
+    PI_WEB_BACKUP_ROOT: backups,
+    PI_WEB_PRODUCTION_HOME: home,
+    PI_WEB_RELEASE_ENV: envFile,
+    PI_WEB_BUILD_RELEASE_BIN: build,
+    PI_WEB_BACKUP_BIN: backup,
+    PI_WEB_DISK_CHECK_BIN: disk,
+    PI_WEB_SYSTEMCTL_BIN: systemctl,
+    PI_WEB_CURL_BIN: curl,
+    PI_WEB_NOW_BIN: now,
+    PI_WEB_SLEEP_BIN: sleep,
+    PI_WEB_NODE_BIN: process.execPath,
+    PI_WEB_TEST_EVENTS: eventsPath,
+    PI_WEB_TEST_SCENARIO: scenario,
+    PI_WEB_TEST_NEW_RELEASE: newRelease,
+    PI_WEB_TEST_NEW_ID: newName,
+    PI_WEB_TEST_NEW_COMMIT: newCommit,
+    PI_WEB_TEST_OLD_ID: oldName,
+    PI_WEB_TEST_OLD_COMMIT: oldCommit,
+    PI_WEB_TEST_NOW: nowPath,
+    PI_WEB_TEST_HEALTH_COUNT: healthCountPath,
+    PI_WEB_TEST_ROOT: root,
+  };
+  return {
+    newRelease,
+    oldRelease,
+    initialPrevious,
+    currentName: newName,
+    previousName: oldName,
+    historyNames,
+    run() {
+      const result = spawnSync("bash", ["scripts/release-production.sh"], { cwd: resolve("."), env: environment, encoding: "utf8" });
+      lockHolder?.kill("SIGTERM");
+      return result;
+    },
+    runWithArgs(args: string[]) {
+      return spawnSync("bash", ["scripts/release-production.sh", ...args], { cwd: resolve("."), env: environment, encoding: "utf8" });
+    },
+    events() { return readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean); },
+    currentTarget() { return realpathSync(join(deploy, "current")); },
+    previousTarget() { return realpathSync(join(deploy, "previous")); },
+    remainingReleaseNames() { return readdirSync(releases).sort(); },
+    holdLock() {
+      const ready = join(root, "lock-ready");
+      lockHolder = spawn("bash", ["-c", `exec 9>${JSON.stringify(join(deploy, "release.lock"))}; flock 9; touch ${JSON.stringify(ready)}; sleep 30`], { stdio: "ignore" });
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(ready) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      assert.equal(existsSync(ready), true);
+    },
+  };
+}
+
+const releaseCases = [
+  ["verify-fails", ["build"], false],
+  ["staging-fails", ["build"], false],
+  ["disk-full", ["build", "disk-check"], false],
+  ["prebackup-fails", ["build", "disk-check", "backup:prepare"], false],
+  ["budget-exhausted", ["build", "disk-check", "backup:prepare", "drain", "resume"], false],
+  ["final-backup-fails", ["build", "disk-check", "backup:prepare", "drain", "stop", "backup:finalize", "start-old", "health-old"], false],
+  ["new-health-fails", ["build", "disk-check", "backup:prepare", "drain", "stop", "backup:finalize", "start-new", "health-new", "stop-new", "start-old", "health-old"], false],
+  ["success", ["build", "disk-check", "backup:prepare", "drain", "stop", "backup:finalize", "start-new", "health-new", "retention"], true],
+] as const;
+
+for (const [scenario, expectedEvents, success] of releaseCases) {
+  test(`release state machine: ${scenario}`, () => {
+    const fixture = releaseFixture(scenario);
+    const result = fixture.run();
+    assert.equal(result.status === 0, success);
+    assert.deepEqual(fixture.events(), expectedEvents);
+    assert.equal(fixture.currentTarget(), success ? fixture.newRelease : fixture.oldRelease);
+    assert.equal(fixture.previousTarget(), success ? fixture.oldRelease : fixture.initialPrevious);
+  });
+}
+
+test("a concurrent release fails before build", () => {
+  const fixture = releaseFixture("success");
+  fixture.holdLock();
+  const result = fixture.run();
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(fixture.events(), []);
+});
+
+test("normal releases reject the one-time legacy migration flags", () => {
+  const fixture = releaseFixture("success");
+  const result = fixture.runWithArgs(["--allow-legacy-stop"]);
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(fixture.events(), []);
+});
+
+test("release retention preserves current and previous and keeps four total", () => {
+  const fixture = releaseFixture("success", { existingReleases: 6 });
+  assert.equal(fixture.run().status, 0);
+  assert.deepEqual(fixture.remainingReleaseNames(), [
+    fixture.currentName,
+    fixture.previousName,
+    fixture.historyNames.at(-1),
+    fixture.historyNames.at(-2),
+  ].sort());
 });
