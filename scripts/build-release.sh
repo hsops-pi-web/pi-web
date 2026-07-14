@@ -10,6 +10,42 @@ cleanup_worktree() {
   fi
 }
 
+copy_runtime_dependency_closure() {
+  local source_root=$1 target_root=$2 package_name package_path target_path target_dir
+  shift 2
+  "$NODE_BIN" - "$source_root" "$@" <<'NODE' | while IFS= read -r package_name; do
+const { createRequire } = require("node:module");
+const { dirname } = require("node:path");
+const sourceRoot = process.argv[2];
+const roots = process.argv.slice(3);
+const requireFromSource = createRequire(`${sourceRoot}/package.json`);
+const seen = new Set();
+
+function visit(name) {
+  if (seen.has(name)) return;
+  seen.add(name);
+  let pkg;
+  try {
+    pkg = requireFromSource(`${name}/package.json`);
+  } catch {
+    return;
+  }
+  for (const dep of Object.keys(pkg.dependencies || {})) visit(dep);
+}
+
+for (const root of roots) visit(root);
+for (const name of seen) process.stdout.write(`${name}\n`);
+NODE
+    package_path="$source_root/node_modules/$package_name"
+    target_path="$target_root/node_modules/$package_name"
+    target_dir=$(dirname "$target_path")
+    [[ -d "$package_path" ]] || die "runtime dependency missing: $package_name"
+    mkdir -p "$target_dir"
+    rm -rf "$target_path"
+    cp -a "$package_path" "$target_path"
+  done
+}
+
 main() {
   local test_mode=false
   if [[ "${NODE_ENV:-}" == test && "${PI_WEB_ALLOW_TEST_SOURCE:-}" == 1 ]]; then test_mode=true; fi
@@ -55,6 +91,11 @@ main() {
     cp -a "$worktree/.next/static" "$stage/.next/static"
     cp -a "$worktree/public" "$stage/public"
     cp -a "$worktree/.pi/extensions" "$stage/.pi/extensions"
+    copy_runtime_dependency_closure "$worktree" "$stage" \
+      "@modelcontextprotocol/sdk" \
+      "@z_ai/mcp-server" \
+      "typebox" \
+      "zod"
     cp "$worktree/scripts/systemd-stop.sh" "$stage/scripts/systemd-stop.sh"
   fi
 
