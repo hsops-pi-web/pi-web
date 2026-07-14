@@ -14,11 +14,11 @@ copy_runtime_dependency_closure() {
   local source_root=$1 target_root=$2 package_name package_path target_path target_dir
   shift 2
   "$NODE_BIN" - "$source_root" "$@" <<'NODE' | while IFS= read -r package_name; do
-const { createRequire } = require("node:module");
 const { dirname } = require("node:path");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
 const sourceRoot = process.argv[2];
 const roots = process.argv.slice(3);
-const requireFromSource = createRequire(`${sourceRoot}/package.json`);
 const seen = new Set();
 
 function visit(name) {
@@ -26,7 +26,7 @@ function visit(name) {
   seen.add(name);
   let pkg;
   try {
-    pkg = requireFromSource(`${name}/package.json`);
+    pkg = JSON.parse(readFileSync(join(sourceRoot, "node_modules", ...name.split("/"), "package.json"), "utf8"));
   } catch {
     return;
   }
