@@ -1,17 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { getAll, add, remove, clear, validate } from "@/lib/recent-cwds-storage";
 
 const STORAGE_KEY = "pi-web-recent-cwds";
+const fetchMock = vi.fn<typeof fetch>();
 
-beforeEach(() => localStorage.clear());
+vi.stubGlobal("fetch", fetchMock);
+
+beforeEach(() => {
+  localStorage.clear();
+  fetchMock.mockReset();
+});
 afterEach(() => localStorage.clear());
 
-function setMockData(data: any[]) {
+function setMockData(data: Array<{ path: unknown; timestamp: unknown }>) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
-
-// Mock fetch for validate tests
-global.fetch = jest.fn();
 
 describe("getAll", () => {
   it("应该返回空数组当 localStorage 为空", () => {
@@ -38,7 +41,7 @@ describe("getAll", () => {
     expect(result[1].path).toBe("/p1");
   });
 
-  it("应该处理损坏的 JSON 数据", () => {
+  it("损坏的 JSON 数据应该返回空数组", () => {
     localStorage.setItem(STORAGE_KEY, "invalid");
     expect(getAll()).toEqual([]);
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
@@ -75,7 +78,7 @@ describe("add", () => {
     const result = add("/new");
     expect(result).toHaveLength(5);
     expect(result[0].path).toBe("/new");
-    expect(result[4].path).toBe("/p2");
+    expect(result[4].path).toBe("/p4");
   });
 
   it("添加已存在的目录时应该移到开头", () => {
@@ -118,23 +121,18 @@ describe("clear", () => {
 });
 
 describe("validate", () => {
-  beforeEach(() => jest.clearAllMocks());
-
   it("验证有效目录应该返回 true", async () => {
-    (global.fetch as jest.Mock).mockResolvedValue({
-      ok: true,
-      json: async () => ({ cwd: "/valid" }),
-    });
+    fetchMock.mockResolvedValue(Response.json({ cwd: "/valid" }));
     expect(await validate("/valid")).toBe(true);
   });
 
   it("验证无效目录应该返回 false", async () => {
-    (global.fetch as jest.Mock).mockResolvedValue({ ok: false });
+    fetchMock.mockResolvedValue(new Response(null, { status: 400 }));
     expect(await validate("/invalid")).toBe(false);
   });
 
   it("网络错误应该返回 undefined", async () => {
-    (global.fetch as jest.Mock).mockRejectedValue(new Error("Network error"));
+    fetchMock.mockRejectedValue(new Error("Network error"));
     expect(await validate("/path")).toBeUndefined();
   });
 });

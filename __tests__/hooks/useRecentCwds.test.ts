@@ -1,20 +1,24 @@
-import { describe, it, expect, beforeEach } from "@jest/globals";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { renderHook, act, waitFor, cleanup } from "@testing-library/react";
 import { useRecentCwds } from "@/hooks/useRecentCwds";
-import { getAll, add, remove, clear } from "@/lib/recent-cwds-storage";
+import { getAll, add, remove, clear, validate } from "@/lib/recent-cwds-storage";
 
-jest.mock("@/lib/recent-cwds-storage");
+vi.mock("@/lib/recent-cwds-storage");
 
-const mockGetAll = getAll as jest.MockedFunction<typeof getAll>;
-const mockAdd = add as jest.MockedFunction<typeof add>;
-const mockRemove = remove as jest.MockedFunction<typeof remove>;
-const mockClear = clear as jest.MockedFunction<typeof clear>;
+afterEach(cleanup);
+
+const mockGetAll = vi.mocked(getAll);
+const mockAdd = vi.mocked(add);
+const mockRemove = vi.mocked(remove);
+const mockClear = vi.mocked(clear);
+const mockValidate = vi.mocked(validate);
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  vi.clearAllMocks();
   mockGetAll.mockReturnValue([]);
   mockAdd.mockReturnValue([]);
   mockRemove.mockReturnValue([]);
+  mockValidate.mockResolvedValue(true);
 });
 
 describe("useRecentCwds", () => {
