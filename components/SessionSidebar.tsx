@@ -8,6 +8,10 @@ import { authFetch } from "@/lib/client-auth-fetch";
 import type { SessionTreeNode, WorkspaceSummary } from "./session-sidebar/types";
 import { buildSessionTree, formatRelativeTime } from "./session-sidebar/utils";
 import { WorkspaceSwitcher } from "./session-sidebar/WorkspaceSwitcher";
+import { ArchiveViewToggle } from "./session-sidebar/ArchiveViewToggle";
+import { BulkSessionToolbar } from "./session-sidebar/BulkSessionToolbar";
+import { SessionFilterBar } from "./session-sidebar/SessionFilterBar";
+import { SessionSearchBox } from "./session-sidebar/SessionSearchBox";
 
 interface Props {
   selectedSessionId: string | null;
@@ -120,6 +124,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const { cwds: recentCwds, addCwd } = useRecentCwds();
   const [homeDir, setHomeDir] = useState<string>("");
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [tags, setTags] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [archiveFilter, setArchiveFilter] = useState<"exclude" | "include" | "only">("exclude");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searching, setSearching] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [customPathOpen, setCustomPathOpen] = useState(false);
   const [customPathValue, setCustomPathValue] = useState("");
@@ -133,7 +144,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const loadSessions = useCallback(async (showLoading = false) => {
     try {
       if (showLoading) setLoading(true);
-      const res = await authFetch("/api/sessions");
+      const params = new URLSearchParams();
+      if (selectedCwd) params.set("cwd", selectedCwd);
+      if (searchQuery.trim()) params.set("q", searchQuery.trim());
+      if (favoriteOnly) params.set("favorite", "true");
+      if (archiveFilter !== "exclude") params.set("archived", archiveFilter);
+      if (selectedTag) params.set("tag", selectedTag);
+      const res = await authFetch(`/api/sessions${params.size ? `?${params.toString()}` : ""}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { sessions: SessionInfo[] };
       setAllSessions(data.sessions);
@@ -148,7 +165,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, []);
+  }, [archiveFilter, favoriteOnly, searchQuery, selectedCwd, selectedTag]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -167,6 +184,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     void loadWorkspaces();
   }, [loadWorkspaces, refreshKey]);
+
+  const loadTags = useCallback(async () => {
+    const res = await authFetch("/api/tags");
+    if (!res.ok) return;
+    const data = await res.json() as { tags: Array<{ id: number; name: string; color: string | null }> };
+    setTags(data.tags);
+  }, []);
+
+  useEffect(() => {
+    void loadTags();
+  }, [loadTags]);
 
   useEffect(() => {
     if (explorerRefreshKey !== undefined) setExplorerKey((k) => k + 1);
@@ -271,6 +299,44 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     });
     if (!res.ok) void loadWorkspaces();
   }, [loadWorkspaces]);
+
+  const patchSessionMetadata = useCallback(async (session: SessionInfo, patch: { favorite?: boolean; archived?: boolean }) => {
+    setAllSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...patch } : item));
+    const res = await authFetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) void loadSessions(false);
+  }, [loadSessions]);
+
+  const bulkUpdate = useCallback(async (operation: "favorite" | "archive") => {
+    const sessionIds = Array.from(selectedIds);
+    if (sessionIds.length === 0) return;
+    const res = await authFetch("/api/sessions/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionIds, operation }),
+    });
+    if (res.ok) {
+      setSelectedIds(new Set());
+      void loadSessions(false);
+    }
+  }, [loadSessions, selectedIds]);
+
+  const toggleSelected = useCallback((sessionId: string, selected: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(sessionId);
+      else next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
+  const submitSearch = useCallback(() => {
+    setSearching(true);
+    void loadSessions(false).finally(() => setSearching(false));
+  }, [loadSessions]);
 
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
@@ -399,9 +465,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           onCommitCustomPath={commitCustomPath}
           onCancelCustomPath={cancelCustomPath}
         />
+        <SessionSearchBox value={searchQuery} onChange={setSearchQuery} onSubmit={submitSearch} searching={searching} />
+        <div style={{ marginTop: 6 }}>
+          <ArchiveViewToggle value={archiveFilter} onChange={setArchiveFilter} />
+        </div>
+        <SessionFilterBar favoriteOnly={favoriteOnly} onFavoriteOnlyChange={setFavoriteOnly} selectedTag={selectedTag} tags={tags} onTagChange={setSelectedTag} />
       </div>
 
       {/* Session list */}
+      <BulkSessionToolbar selectedCount={selectedIds.size} onFavorite={() => void bulkUpdate("favorite")} onArchive={() => void bulkUpdate("archive")} onClear={() => setSelectedIds(new Set())} />
       <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
@@ -429,6 +501,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               onSessionDeleted?.(id);
               loadSessions();
             }}
+            onPatchSession={patchSessionMetadata}
+            selectedIds={selectedIds}
+            onToggleSelected={toggleSelected}
             depth={0}
           />
         ))}
@@ -531,6 +606,9 @@ function SessionTreeItem({
   onSelectSession,
   onRenamed,
   onSessionDeleted,
+  onPatchSession,
+  selectedIds,
+  onToggleSelected,
   depth,
 }: {
   node: SessionTreeNode;
@@ -538,6 +616,9 @@ function SessionTreeItem({
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
+  onPatchSession: (session: SessionInfo, patch: { favorite?: boolean; archived?: boolean }) => void;
+  selectedIds: Set<string>;
+  onToggleSelected: (sessionId: string, selected: boolean) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -563,6 +644,9 @@ function SessionTreeItem({
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
+          onPatchSession={onPatchSession}
+          checked={selectedIds.has(node.session.id)}
+          onCheckedChange={(checked) => onToggleSelected(node.session.id, checked)}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -579,6 +663,9 @@ function SessionTreeItem({
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
+              onPatchSession={onPatchSession}
+              selectedIds={selectedIds}
+              onToggleSelected={onToggleSelected}
               depth={depth + 1}
             />
           ))}
@@ -594,6 +681,9 @@ function SessionItem({
   onClick,
   onRenamed,
   onDeleted,
+  onPatchSession,
+  checked,
+  onCheckedChange,
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -604,6 +694,9 @@ function SessionItem({
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
+  onPatchSession: (session: SessionInfo, patch: { favorite?: boolean; archived?: boolean }) => void;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -758,6 +851,14 @@ function SessionItem({
       ) : (
         /* ── Normal view ── */
         <>
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(event) => onCheckedChange(event.target.checked)}
+            onClick={(event) => event.stopPropagation()}
+            title="Select session"
+            style={{ width: 14, height: 14, flexShrink: 0 }}
+          />
           {/* Fork indicator for child sessions */}
           {depth > 0 && (
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -781,12 +882,29 @@ function SessionItem({
               title={title}
             >
               {title}
+              {session.orphaned && <span style={{ marginLeft: 6, color: "#f59e0b", fontSize: 10 }}>orphaned</span>}
             </div>
             <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11 }}>
               <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
               <span>{session.messageCount} msgs</span>
+              {session.archived && <span>archived</span>}
             </div>
           </div>
+
+          <button
+            onClick={(event) => { event.stopPropagation(); onPatchSession(session, { favorite: !session.favorite }); }}
+            title={session.favorite ? "Unfavorite" : "Favorite"}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, flexShrink: 0, background: session.favorite ? "var(--bg-selected)" : "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 6, color: session.favorite ? "var(--accent)" : "var(--text-muted)", cursor: "pointer" }}
+          >
+            ★
+          </button>
+          <button
+            onClick={(event) => { event.stopPropagation(); onPatchSession(session, { archived: !session.archived }); }}
+            title={session.archived ? "Unarchive" : "Archive"}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, flexShrink: 0, background: session.archived ? "var(--bg-selected)" : "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 6, color: session.archived ? "var(--accent)" : "var(--text-muted)", cursor: "pointer", fontSize: 10 }}
+          >
+            A
+          </button>
 
           {/* Collapse toggle — always visible when has children */}
           {hasChildren && (
