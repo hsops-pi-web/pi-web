@@ -230,6 +230,21 @@ export function createSessionIndexStore(db: Database.Database) {
     return result.changes > 0;
   }
 
+  function updateTag(username: string, tagId: number, patch: { name?: string; color?: string | null }): boolean {
+    const tag = db.prepare("SELECT id, name, color FROM tags WHERE id=? AND username=?").get(tagId, username) as { id: number; name: string; color: string | null } | undefined;
+    if (!tag) return false;
+    const name = patch.name === undefined ? tag.name : normalizeTagName(patch.name);
+    if (!name) return false;
+    db.prepare("UPDATE tags SET name=?, color=?, updated_at=? WHERE id=? AND username=?").run(
+      name,
+      patch.color === undefined ? tag.color : patch.color,
+      nowIso(),
+      tagId,
+      username,
+    );
+    return true;
+  }
+
   function listWorkspaces(username: string) {
     const rows = db.prepare(`
       SELECT w.cwd, COALESCE(uwm.display_name, w.display_name) AS displayName, w.session_count AS sessionCount,
@@ -301,6 +316,7 @@ export function createSessionIndexStore(db: Database.Database) {
     addTagToSession,
     removeTagFromSession,
     listTags,
+    updateTag,
     deleteTag,
     listWorkspaces,
     setWorkspaceMetadata,
