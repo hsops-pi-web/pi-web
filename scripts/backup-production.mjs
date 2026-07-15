@@ -75,6 +75,22 @@ function inspectDatabase(path) {
     db.close();
   }
 }
+function inspectSessionIndexDatabase(path) {
+  if (!existsSync(path)) return { status: "missing" };
+  const db = new Database(path, { readonly: true, fileMustExist: true });
+  try {
+    const integrityCheck = db.pragma("integrity_check", { simple: true });
+    if (integrityCheck !== "ok") throw new Error("session index integrity check failed");
+    return { status: "ok", integrityCheck };
+  } finally {
+    db.close();
+  }
+}
+async function backupOptionalDatabase(source, destination) {
+  if (!existsSync(source)) return { status: "missing" };
+  await backupDatabase(source, destination);
+  return inspectSessionIndexDatabase(destination);
+}
 function countFiles(root, predicate = () => true) {
   if (!existsSync(root)) return 0;
   let count = 0;
@@ -95,7 +111,7 @@ function pathsFor(home, backupRoot, backupId) {
   };
 }
 function copyDirectories(paths) {
-  runRsync(paths.sourceAuth, join(paths.incomplete, ".pi-web-auth"), ["auth.db", "auth.db-wal", "auth.db-shm"]);
+  runRsync(paths.sourceAuth, join(paths.incomplete, ".pi-web-auth"), ["auth.db", "auth.db-wal", "auth.db-shm", "session-index.db", "session-index.db-wal", "session-index.db-shm"]);
   runRsync(paths.sourceUsers, join(paths.incomplete, "pi-users"));
   runRsync(paths.sourceAgent, join(paths.incomplete, ".pi", "agent"));
 }
@@ -122,6 +138,7 @@ async function prepare(options) {
   });
   copyDirectories(paths);
   await backupDatabase(join(paths.sourceAuth, "auth.db"), join(paths.incomplete, ".pi-web-auth", "auth.db"));
+  await backupOptionalDatabase(join(paths.sourceAuth, "session-index.db"), join(paths.incomplete, ".pi-web-auth", "session-index.db"));
   process.stdout.write(`${paths.incomplete}\n`);
 }
 async function finalize(options) {
@@ -139,8 +156,12 @@ async function finalize(options) {
   copyDirectories(paths);
   const skipFinal = process.env.PI_WEB_SKIP_FINAL_DB_BACKUP_FOR_TEST === "1";
   if (skipFinal && process.env.NODE_ENV !== "test") throw new Error("test backup override is forbidden");
+  let sessionIndex;
   if (!skipFinal) {
     await backupDatabase(join(paths.sourceAuth, "auth.db"), join(paths.incomplete, ".pi-web-auth", "auth.db"));
+    sessionIndex = await backupOptionalDatabase(join(paths.sourceAuth, "session-index.db"), join(paths.incomplete, ".pi-web-auth", "session-index.db"));
+  } else {
+    sessionIndex = inspectSessionIndexDatabase(join(paths.incomplete, ".pi-web-auth", "session-index.db"));
   }
   const database = validateDirectory(paths.incomplete);
   const manifest = {
@@ -159,6 +180,7 @@ async function finalize(options) {
       userFiles: countFiles(join(paths.incomplete, "pi-users")),
       agentFiles: countFiles(join(paths.incomplete, ".pi", "agent")),
     },
+    sessionIndex,
     dataDirectories: [".pi-web-auth", "pi-users", ".pi/agent"],
   };
   writeAtomicJson(join(paths.incomplete, "backup.json"), manifest);
@@ -173,8 +195,12 @@ function validate(options) {
   const path = join(backupRoot, backupId);
   const manifest = JSON.parse(readFileSync(join(path, "backup.json"), "utf8"));
   const database = validateDirectory(path);
+  const sessionIndex = inspectSessionIndexDatabase(join(path, ".pi-web-auth", "session-index.db"));
   if (manifest.backupId !== backupId || manifest.databaseIntegrity !== "ok" || database.databaseIntegrity !== "ok") {
     throw new Error("backup manifest validation failed");
+  }
+  if (manifest.sessionIndex?.status === "ok" && sessionIndex.integrityCheck !== "ok") {
+    throw new Error("session index backup validation failed");
   }
   process.stdout.write("ok\n");
 }

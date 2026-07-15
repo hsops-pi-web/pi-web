@@ -57,6 +57,9 @@ async function productionHome(root: string): Promise<string> {
     INSERT INTO user_model_preferences VALUES('alice','glm','glm-5.2','2026-07-13');
   `);
   db.close();
+  const sessionIndex = new Database(join(home, ".pi-web-auth", "session-index.db"));
+  sessionIndex.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY); INSERT INTO sessions (id) VALUES ('s1');");
+  sessionIndex.close();
   writeFileSync(join(home, "pi-users", "alice", "note.txt"), "hello");
   writeFileSync(join(home, ".pi", "agent", "sessions", "fixture", "one.jsonl"), "{}\n");
   writeFileSync(join(home, ".pi", "agent", "sessions", "fixture", "two.jsonl"), "{}\n");
@@ -137,7 +140,22 @@ test("prepare plus finalize creates an atomic verified backup manifest", async (
   assert.equal(manifest.counts.loginSessions, 1);
   assert.equal(manifest.counts.modelPreferences, 1);
   assert.equal(manifest.counts.piJsonl, 2);
+  assert.equal(manifest.sessionIndex.status, "ok");
+  assert.equal(manifest.sessionIndex.integrityCheck, "ok");
+  assert.equal(existsSync(join(backupRoot, "backup-1", ".pi-web-auth", "session-index.db")), true);
   assert.equal(JSON.stringify(manifest).includes("alice"), false);
+});
+
+test("backup manifest allows missing session index before feature deployment", async () => {
+  const root = tempRoot();
+  const home = await productionHome(root);
+  rmSync(join(home, ".pi-web-auth", "session-index.db"), { force: true });
+  const backupRoot = join(root, "backups");
+  const common = ["scripts/backup-production.mjs", "--home", home, "--backup-root", backupRoot, "--backup-id", "backup-missing-index", "--release-id", "release-1", "--commit", "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86"];
+  assert.equal(spawnSync(process.execPath, [common[0], "prepare", ...common.slice(1)], { encoding: "utf8" }).status, 0);
+  assert.equal(spawnSync(process.execPath, [common[0], "finalize", ...common.slice(1)], { encoding: "utf8" }).status, 0);
+  const manifest = JSON.parse(readFileSync(join(backupRoot, "backup-missing-index", "backup.json"), "utf8"));
+  assert.deepEqual(manifest.sessionIndex, { status: "missing" });
 });
 
 test("failed validation remains incomplete and is never counted for retention", async () => {
