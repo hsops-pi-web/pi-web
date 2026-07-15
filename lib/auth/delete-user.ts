@@ -8,6 +8,7 @@ import {
 } from "@/lib/rpc-manager";
 import { getDb } from "./db";
 import { filterJsonlUnderRoot } from "./delete-user-helpers";
+import { cleanupDeletedUserSessionIndexGlobal } from "../session-index/service";
 import {
   canonicalizeExistingPrefix,
   getUserRoot,
@@ -71,15 +72,20 @@ export async function deleteUserCompletely(
     );
     const idByPath = new Map(ownedSessions.map(({ file, id }) => [file, id]));
 
+    const deletedSessionIds: string[] = [];
     for (const file of jsonlFiles) {
       rmSync(file, { force: true });
       const id = idByPath.get(file);
-      if (id) invalidateSessionPathCache(id);
+      if (id) {
+        deletedSessionIds.push(id);
+        invalidateSessionPathCache(id);
+      }
     }
 
     rmSync(userRootPath, { recursive: true, force: true });
     db.transaction(() => {
       db.prepare("DELETE FROM user_model_preferences WHERE username=?").run(username);
+      cleanupDeletedUserSessionIndexGlobal(username, deletedSessionIds);
       db.prepare("DELETE FROM users WHERE username=?").run(username);
     })();
     return { ok: true };
