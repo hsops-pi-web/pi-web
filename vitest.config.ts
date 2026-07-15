@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: [
+      "__tests__/components/**/*.test.ts",
       "__tests__/hooks/**/*.test.ts",
       "__tests__/lib/recent-cwds-storage.test.ts",
     ],
