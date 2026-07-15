@@ -108,6 +108,7 @@ CREATE TABLE sessions (
   modified_at TEXT NOT NULL,
   message_count INTEGER NOT NULL DEFAULT 0,
   parent_session_id TEXT,
+  parent_session_path TEXT,
   orphaned INTEGER NOT NULL DEFAULT 0,
   missing INTEGER NOT NULL DEFAULT 0,
   source_mtime_ms INTEGER NOT NULL DEFAULT 0,
@@ -147,8 +148,7 @@ CREATE TABLE session_messages (
 
 ```sql
 CREATE TABLE workspaces (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  cwd TEXT NOT NULL UNIQUE,
+  cwd TEXT PRIMARY KEY,
   owner_username TEXT,
   display_name TEXT,
   session_count INTEGER NOT NULL DEFAULT 0,
@@ -157,8 +157,9 @@ CREATE TABLE workspaces (
 );
 ```
 
-工作区由 session cwd 聚合生成。`display_name` 是系统级建议名，用户个人重命名放在
-`user_workspace_metadata`。
+工作区由 session cwd 聚合生成。`cwd` 是稳定主键，不能使用自增 id 作为用户元数据外键；索引
+重建可能重插 workspaces 行，自增 id 会导致 workspace pin 错位。`display_name` 是系统级建议名，
+用户个人重命名放在 `user_workspace_metadata`。
 
 ### `user_session_metadata`
 
@@ -209,13 +210,13 @@ CREATE TABLE session_tags (
 ```sql
 CREATE TABLE user_workspace_metadata (
   username TEXT NOT NULL,
-  workspace_id INTEGER NOT NULL,
+  cwd TEXT NOT NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
   last_opened_at TEXT,
   display_name TEXT,
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (username, workspace_id),
-  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+  PRIMARY KEY (username, cwd),
+  FOREIGN KEY (cwd) REFERENCES workspaces(cwd) ON DELETE CASCADE
 );
 ```
 
@@ -277,12 +278,19 @@ insert/update/delete trigger 维护 `session_messages_fts`，要么在索引器�
    session，导致 orphaned 文件永远不可见。scanner 必须自己枚举 session 目录并逐文件解析。
 5. 索引每个 session 时计算 `owner_username`：从 cwd 反推落在哪个 `pi-users/<username>` 下，复用
    `resolveSessionOwnership()` 或等价 canonicalize 逻辑；无法归属时写入 `NULL`。
-6. 新会话创建、rename、fork、delete、context navigation 后，触发目标 session 或相关 session 的局部重索引。
-7. 单个 `.jsonl` 解析失败时，把 `orphaned=1` 和 `index_error` 写入 `sessions`，不阻塞其他会话。
-8. 文件消失时标记 `missing=1`，并从默认列表隐藏，保留用户个人元数据，避免临时文件系统问题造成收藏、标签或归档丢失。
-9. 只有用户通过 Web API 明确删除会话，且服务端确认 `.jsonl` 删除成功后，才允许删除该 session 的索引记录和关联用户元数据。
-10. 全量重建只重建索引派生字段和 FTS，不清空用户个人元数据表。
-11. `lib/auth/delete-user.ts` 必须集成 session index：删除用户时，在物理删除该用户 jsonl 后同步删除
+6. 索引有效 session 后必须 upsert 对应 workspace：按 `cwd` 写入 `workspaces`，并根据同一
+   `owner_username` 和 `cwd` 下非 missing、非 orphaned session 重新计算 `session_count` 与
+   `last_active_at`。
+7. `parent_session_id` 不能硬编码为 `NULL`。header 中 `parentSession` 是父 session 文件 path，
+   索引器必须保存 `parent_session_path`，再通过 `sessions.path -> sessions.id` 映射回填
+   `parent_session_id`。单文件索引可先写当前行，再尝试查父 path；批量扫描结束后必须执行一次
+   parent 回填，保证已存在父文件的 fork 树可恢复。
+8. 新会话创建、rename、fork、delete、context navigation 后，触发目标 session 或相关 session 的局部重索引。
+9. 单个 `.jsonl` 解析失败时，把 `orphaned=1` 和 `index_error` 写入 `sessions`，不阻塞其他会话。
+10. 文件消失时标记 `missing=1`，并从默认列表隐藏，保留用户个人元数据，避免临时文件系统问题造成收藏、标签或归档丢失。
+11. 只有用户通过 Web API 明确删除会话，且服务端确认 `.jsonl` 删除成功后，才允许删除该 session 的索引记录和关联用户元数据。
+12. 全量重建只重建索引派生字段、workspaces 聚合和 FTS，不清空用户个人元数据表。
+13. `lib/auth/delete-user.ts` 必须集成 session index：删除用户时，在物理删除该用户 jsonl 后同步删除
     对应 `sessions` 索引行，并清理该 username 的 `user_session_metadata`、`tags`、`session_tags`、
     `user_workspace_metadata`。该清理与现有 auth 用户删除事务失败处理保持一致。
 
@@ -370,6 +378,11 @@ pageSize=<number>
 `name` 继续按现有 session_info 语义写入 `.jsonl`。`favorite`、`archived` 和 `customTitle`
 写入当前用户的 `user_session_metadata`。
 
+双写失败语义必须明确：如果请求同时包含 `name` 和 SQLite 元数据，服务端先写 SQLite 元数据，再写
+`.jsonl` session_info。SQLite 写失败时返回 500 且不写 `.jsonl`。`.jsonl` 写失败时返回 500，并在
+响应中返回 `partialFailure: "metadata_saved_name_failed"`；此时元数据已经保存，客户端刷新后可看到
+收藏/归档变化，但名称不会改变。实现不得谎报全成功。
+
 ### `POST /api/sessions/bulk`
 
 批量操作当前用户可访问的会话：
@@ -397,9 +410,10 @@ pageSize=<number>
 
 排序规则：pinned 优先，其次最近打开，再其次最近活跃。
 
-### `PATCH /api/workspaces/[id]`
+### `PATCH /api/workspaces/[cwd]`
 
-更新当前用户的工作区元数据：
+更新当前用户的工作区元数据。`cwd` 使用 URL 编码的绝对路径，服务端按当前用户和 workspace cwd
+校验归属：
 
 ```json
 {
@@ -478,6 +492,8 @@ UI 必须适配桌面和移动宽度。会话行、标签、工具条和搜索�
 
 - SQLite schema 迁移幂等。
 - 单个 `.jsonl` 索引写入 `sessions`、`session_messages` 和 FTS。
+- 索引有效 session 后 upsert `workspaces`，并正确计算 `session_count` 与 `last_active_at`。
+- parentSession path 能回填为 `parent_session_id`，父子会话树不退化成平铺列表。
 - malformed header 标记 orphaned，不阻塞其他会话。
 - scanner 不复用 `SessionManager.listAll()`，malformed `.jsonl` 能被发现并写入 orphaned 索引行。
 - owner_username 从 cwd 和用户根反推，正常用户根内会话可见，无法归属会话普通用户不可见。

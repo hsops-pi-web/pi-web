@@ -48,7 +48,7 @@ Create these API routes:
 - `app/api/sessions/search/route.ts` - full-text search with snippets and permission-safe results.
 - `app/api/sessions/bulk/route.ts` - batch favorite/archive/tag operations with per-item authorization.
 - `app/api/workspaces/route.ts` - list accessible workspaces.
-- `app/api/workspaces/[id]/route.ts` - update per-user workspace metadata.
+- `app/api/workspaces/[cwd]/route.ts` - update per-user workspace metadata by stable URL-encoded cwd.
 - `app/api/tags/route.ts` - list/create current user's tags.
 - `app/api/tags/[id]/route.ts` - rename/recolor/delete current user's tag.
 
@@ -365,6 +365,7 @@ export function migrateSessionIndexDb(db: Database.Database): void {
       modified_at TEXT NOT NULL,
       message_count INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
+      parent_session_path TEXT,
       orphaned INTEGER NOT NULL DEFAULT 0,
       missing INTEGER NOT NULL DEFAULT 0,
       source_mtime_ms INTEGER NOT NULL DEFAULT 0,
@@ -416,8 +417,7 @@ export function migrateSessionIndexDb(db: Database.Database): void {
     END;
 
     CREATE TABLE IF NOT EXISTS workspaces (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      cwd TEXT NOT NULL UNIQUE,
+      cwd TEXT PRIMARY KEY,
       owner_username TEXT,
       display_name TEXT,
       session_count INTEGER NOT NULL DEFAULT 0,
@@ -461,13 +461,13 @@ export function migrateSessionIndexDb(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS user_workspace_metadata (
       username TEXT NOT NULL,
-      workspace_id INTEGER NOT NULL,
+      cwd TEXT NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0,
       last_opened_at TEXT,
       display_name TEXT,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (username, workspace_id),
-      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      PRIMARY KEY (username, cwd),
+      FOREIGN KEY (cwd) REFERENCES workspaces(cwd) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS index_state (
@@ -543,12 +543,29 @@ test("tool results are bounded", () => {
 Create `__tests__/lib/session-index/ownership.test.ts`:
 
 ```ts
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { computeSessionOwner } from "../../../lib/session-index/ownership.ts";
 import { getUserRoot } from "../../../lib/auth/paths.ts";
+
+let home = "";
+let originalHome: string | undefined;
+
+before(() => {
+  originalHome = process.env.HOME;
+  home = mkdtempSync(path.join(tmpdir(), "pi-session-owner-"));
+  process.env.HOME = home;
+});
+
+after(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  rmSync(home, { recursive: true, force: true });
+});
 
 test("computes owner from cwd under exactly one user root", () => {
   const aliceRoot = getUserRoot("alice-owner");
@@ -688,24 +705,29 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionIndexDb, migrateSessionIndexDb } from "../../../lib/session-index/db.ts";
-import { indexSessionFile, markMissingSessionPath } from "../../../lib/session-index/indexer.ts";
+import { backfillParentSessionIds, indexSessionFile, markMissingSessionPath } from "../../../lib/session-index/indexer.ts";
 import { getUserRoot } from "../../../lib/auth/paths.ts";
 
 let home = "";
+let originalHome: string | undefined;
 let db: Database.Database;
 
 before(() => {
   home = mkdtempSync(join(tmpdir(), "pi-session-indexer-"));
+  originalHome = process.env.HOME;
+  process.env.HOME = home;
   db = createSessionIndexDb(join(home, "session-index.db"));
   migrateSessionIndexDb(db);
 });
 
 after(() => {
   db.close();
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   rmSync(home, { recursive: true, force: true });
 });
 
-test("indexes a valid session with owner, messages, first message, and FTS", () => {
+test("indexes a valid session with owner, workspace, messages, first message, and FTS", () => {
   const userRoot = getUserRoot("idxalice");
   const cwd = join(userRoot, "project");
   mkdirSync(cwd, { recursive: true });
@@ -725,8 +747,31 @@ test("indexes a valid session with owner, messages, first message, and FTS", () 
     assert.equal(row.message_count, 2);
     assert.equal(row.orphaned, 0);
 
+    const workspace = db.prepare("SELECT cwd, owner_username, session_count, last_active_at FROM workspaces WHERE cwd=?").get(cwd) as { cwd: string; owner_username: string; session_count: number; last_active_at: string };
+    assert.equal(workspace.owner_username, "idxalice");
+    assert.equal(workspace.session_count, 1);
+
     const hit = db.prepare("SELECT session_id FROM session_messages_fts WHERE session_messages_fts MATCH ?").get("findable") as { session_id: string } | undefined;
     assert.equal(hit?.session_id, "s1");
+  } finally {
+    rmSync(userRoot, { recursive: true, force: true });
+  }
+});
+
+test("parentSession path is backfilled to parent_session_id", () => {
+  const userRoot = getUserRoot("idxparent");
+  const cwd = join(userRoot, "project");
+  mkdirSync(cwd, { recursive: true });
+  const parent = join(home, "parent.jsonl");
+  const child = join(home, "child.jsonl");
+  writeFileSync(parent, JSON.stringify({ type: "session", id: "parent", timestamp: "2026-07-15T00:00:00.000Z", cwd }));
+  writeFileSync(child, JSON.stringify({ type: "session", id: "child", timestamp: "2026-07-15T00:00:01.000Z", cwd, parentSession: parent }));
+  try {
+    indexSessionFile(db, { path: child, mtimeMs: 300 }, ["idxparent"]);
+    indexSessionFile(db, { path: parent, mtimeMs: 301 }, ["idxparent"]);
+    backfillParentSessionIds(db);
+    const row = db.prepare("SELECT parent_session_id FROM sessions WHERE id='child'").get() as { parent_session_id: string | null };
+    assert.equal(row.parent_session_id, "parent");
   } finally {
     rmSync(userRoot, { recursive: true, force: true });
   }
@@ -834,6 +879,35 @@ function fallbackSessionId(filePath: string): string {
   return `orphaned:${filePath}`;
 }
 
+function refreshWorkspace(db: Database.Database, cwd: string, owner: string | null, indexedAt: string): void {
+  if (!cwd || !owner) return;
+  const aggregate = db.prepare(`
+    SELECT COUNT(*) AS sessionCount, MAX(modified_at) AS lastActiveAt
+    FROM sessions
+    WHERE cwd=? AND owner_username=? AND missing=0 AND orphaned=0
+  `).get(cwd, owner) as { sessionCount: number; lastActiveAt: string | null };
+
+  db.prepare(`
+    INSERT INTO workspaces (cwd, owner_username, session_count, last_active_at, indexed_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(cwd) DO UPDATE SET
+      owner_username=excluded.owner_username,
+      session_count=excluded.session_count,
+      last_active_at=excluded.last_active_at,
+      indexed_at=excluded.indexed_at
+  `).run(cwd, owner, aggregate.sessionCount, aggregate.lastActiveAt, indexedAt);
+}
+
+export function backfillParentSessionIds(db: Database.Database): void {
+  db.prepare(`
+    UPDATE sessions
+    SET parent_session_id = (
+      SELECT parent.id FROM sessions parent WHERE parent.path = sessions.parent_session_path
+    )
+    WHERE parent_session_path IS NOT NULL
+  `).run();
+}
+
 export function indexSessionFile(db: Database.Database, file: ScannedSessionFile, usernames: string[]): void {
   const indexedAt = nowIso();
   try {
@@ -859,8 +933,8 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
 
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO sessions (id, path, cwd, owner_username, title, first_message, created_at, modified_at, message_count, parent_session_id, orphaned, missing, source_mtime_ms, indexed_at, index_error)
-        VALUES (@id, @path, @cwd, @owner, @title, @firstMessage, @createdAt, @modifiedAt, @messageCount, @parentSessionId, 0, 0, @sourceMtimeMs, @indexedAt, NULL)
+        INSERT INTO sessions (id, path, cwd, owner_username, title, first_message, created_at, modified_at, message_count, parent_session_id, parent_session_path, orphaned, missing, source_mtime_ms, indexed_at, index_error)
+        VALUES (@id, @path, @cwd, @owner, @title, @firstMessage, @createdAt, @modifiedAt, @messageCount, @parentSessionId, @parentSessionPath, 0, 0, @sourceMtimeMs, @indexedAt, NULL)
         ON CONFLICT(id) DO UPDATE SET
           path=excluded.path,
           cwd=excluded.cwd,
@@ -870,6 +944,7 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
           modified_at=excluded.modified_at,
           message_count=excluded.message_count,
           parent_session_id=excluded.parent_session_id,
+          parent_session_path=excluded.parent_session_path,
           orphaned=0,
           missing=0,
           source_mtime_ms=excluded.source_mtime_ms,
@@ -885,7 +960,10 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
         createdAt: header.timestamp ?? indexedAt,
         modifiedAt: indexedAt,
         messageCount: messageRows.length,
-        parentSessionId: null,
+        parentSessionId: header.parentSession
+          ? (db.prepare("SELECT id FROM sessions WHERE path=?").get(header.parentSession) as { id: string } | undefined)?.id ?? null
+          : null,
+        parentSessionPath: header.parentSession ?? null,
         sourceMtimeMs: file.mtimeMs,
         indexedAt,
       });
@@ -895,6 +973,8 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
       for (const row of messageRows) {
         insertMessage.run(header.id, row.entryId, row.role, row.text, row.sequence, row.createdAt);
       }
+      refreshWorkspace(db, header.cwd ?? "", owner, indexedAt);
+      backfillParentSessionIds(db);
     })();
   } catch (error) {
     const errorText = error instanceof Error ? error.message : String(error);
@@ -993,6 +1073,14 @@ test("bulk operations report successes and failures", () => {
   assert.deepEqual(result.updated, ["a1"]);
   assert.deepEqual(result.failed, [{ sessionId: "missing", error: "not_found" }]);
 });
+
+test("searchSessions returns permission-filtered FTS hits", () => {
+  db.prepare("INSERT INTO session_messages (session_id, entry_id, role, text, sequence) VALUES (?, ?, ?, ?, ?)").run("a1", "m1", "user", "needle alpha", 0);
+  db.prepare("INSERT INTO session_messages (session_id, entry_id, role, text, sequence) VALUES (?, ?, ?, ?, ?)").run("b1", "m2", "user", "needle hidden", 0);
+  const result = store.searchSessions({ username: "alice", q: "needle", page: 1, pageSize: 20 });
+  assert.equal(result.total, 1);
+  assert.equal(result.results[0].sessionId, "a1");
+});
 ```
 
 - [ ] **Step 2: Run failing test**
@@ -1047,6 +1135,27 @@ export function createSessionIndexStore(db: Database.Database) {
     return Boolean(row);
   }
 
+  function setSessionMetadata(username: string, sessionId: string, patch: MetadataPatch) {
+    if (!sessionOwned(username, sessionId)) return false;
+    ensureMetadata(username, sessionId);
+    const current = db.prepare("SELECT favorite, archived, custom_title FROM user_session_metadata WHERE username=? AND session_id=?").get(username, sessionId) as { favorite: number; archived: number; custom_title: string | null };
+    db.prepare(`UPDATE user_session_metadata SET favorite=?, archived=?, custom_title=?, updated_at=? WHERE username=? AND session_id=?`).run(
+      patch.favorite === undefined ? current.favorite : boolToInt(patch.favorite),
+      patch.archived === undefined ? current.archived : boolToInt(patch.archived),
+      patch.customTitle === undefined ? current.custom_title : patch.customTitle,
+      nowIso(), username, sessionId,
+    );
+    return true;
+  }
+
+  function addTagToSession(username: string, sessionId: string, tagId: number) {
+    if (!sessionOwned(username, sessionId)) return false;
+    const tag = db.prepare("SELECT id FROM tags WHERE id=? AND username=?").get(tagId, username);
+    if (!tag) return false;
+    db.prepare(`INSERT OR IGNORE INTO session_tags (username, session_id, tag_id, created_at) VALUES (?, ?, ?, ?)`).run(username, sessionId, tagId, nowIso());
+    return true;
+  }
+
   return {
     listSessions(query: SessionListQuery) {
       const where = ["s.owner_username=@username", "s.missing=0", archivedClause(query.archived), orphanedClause(query.orphaned)];
@@ -1068,18 +1177,7 @@ export function createSessionIndexStore(db: Database.Database) {
       return { sessions: rows, total, page: query.page, pageSize: query.pageSize };
     },
 
-    setSessionMetadata(username: string, sessionId: string, patch: MetadataPatch) {
-      if (!sessionOwned(username, sessionId)) return false;
-      ensureMetadata(username, sessionId);
-      const current = db.prepare("SELECT favorite, archived, custom_title FROM user_session_metadata WHERE username=? AND session_id=?").get(username, sessionId) as { favorite: number; archived: number; custom_title: string | null };
-      db.prepare(`UPDATE user_session_metadata SET favorite=?, archived=?, custom_title=?, updated_at=? WHERE username=? AND session_id=?`).run(
-        patch.favorite === undefined ? current.favorite : boolToInt(patch.favorite),
-        patch.archived === undefined ? current.archived : boolToInt(patch.archived),
-        patch.customTitle === undefined ? current.custom_title : patch.customTitle,
-        nowIso(), username, sessionId,
-      );
-      return true;
-    },
+    setSessionMetadata,
 
     createTag(username: string, input: TagInput) {
       const name = input.name.trim().slice(0, 40);
@@ -1088,16 +1186,38 @@ export function createSessionIndexStore(db: Database.Database) {
       return db.prepare("SELECT id, username, name, color FROM tags WHERE username=? AND name=?").get(username, name) as { id: number; username: string; name: string; color: string | null };
     },
 
-    addTagToSession(username: string, sessionId: string, tagId: number) {
-      if (!sessionOwned(username, sessionId)) return false;
-      const tag = db.prepare("SELECT id FROM tags WHERE id=? AND username=?").get(tagId, username);
-      if (!tag) return false;
-      db.prepare(`INSERT OR IGNORE INTO session_tags (username, session_id, tag_id, created_at) VALUES (?, ?, ?, ?)`).run(username, sessionId, tagId, nowIso());
-      return true;
-    },
+    addTagToSession,
 
     listTags(username: string) {
       return db.prepare("SELECT id, name, color FROM tags WHERE username=? ORDER BY name ASC").all(username);
+    },
+
+    searchSessions(query: { username: string; q: string; cwd?: string; tag?: string; page: number; pageSize: number }) {
+      const params: Record<string, unknown> = { username: query.username, q: query.q, limit: query.pageSize, offset: (query.page - 1) * query.pageSize };
+      const where = ["session_messages_fts MATCH @q", "s.owner_username=@username", "s.missing=0"];
+      if (query.cwd) { where.push("s.cwd=@cwd"); params.cwd = query.cwd; }
+      if (query.tag) { where.push("EXISTS (SELECT 1 FROM session_tags st JOIN tags t ON t.id=st.tag_id WHERE st.session_id=s.id AND st.username=@username AND (t.name=@tag OR CAST(t.id AS TEXT)=@tag))"); params.tag = query.tag; }
+      const whereSql = where.join(" AND ");
+      const total = (db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM session_messages_fts
+        JOIN session_messages sm ON sm.id=session_messages_fts.rowid
+        JOIN sessions s ON s.id=sm.session_id
+        WHERE ${whereSql}
+      `).get(params) as { count: number }).count;
+      const results = db.prepare(`
+        SELECT s.id AS sessionId, sm.entry_id AS entryId, s.cwd, COALESCE(usm.custom_title, s.title, s.first_message, s.id) AS title,
+               snippet(session_messages_fts, 0, '<mark>', '</mark>', '...', 12) AS snippet,
+               sm.role, s.modified_at AS modified
+        FROM session_messages_fts
+        JOIN session_messages sm ON sm.id=session_messages_fts.rowid
+        JOIN sessions s ON s.id=sm.session_id
+        LEFT JOIN user_session_metadata usm ON usm.username=@username AND usm.session_id=s.id
+        WHERE ${whereSql}
+        ORDER BY rank
+        LIMIT @limit OFFSET @offset
+      `).all(params);
+      return { results, total, page: query.page, pageSize: query.pageSize };
     },
 
     bulkUpdate(username: string, sessionIds: string[], op: BulkOperation) {
@@ -1106,11 +1226,11 @@ export function createSessionIndexStore(db: Database.Database) {
       for (const sessionId of sessionIds) {
         if (!sessionOwned(username, sessionId)) { failed.push({ sessionId, error: "not_found" }); continue; }
         let ok = true;
-        if (op.operation === "archive") ok = this.setSessionMetadata(username, sessionId, { archived: true });
-        if (op.operation === "unarchive") ok = this.setSessionMetadata(username, sessionId, { archived: false });
-        if (op.operation === "favorite") ok = this.setSessionMetadata(username, sessionId, { favorite: true });
-        if (op.operation === "unfavorite") ok = this.setSessionMetadata(username, sessionId, { favorite: false });
-        if (op.operation === "add_tag") ok = op.tagId !== undefined && this.addTagToSession(username, sessionId, op.tagId);
+        if (op.operation === "archive") ok = setSessionMetadata(username, sessionId, { archived: true });
+        if (op.operation === "unarchive") ok = setSessionMetadata(username, sessionId, { archived: false });
+        if (op.operation === "favorite") ok = setSessionMetadata(username, sessionId, { favorite: true });
+        if (op.operation === "unfavorite") ok = setSessionMetadata(username, sessionId, { favorite: false });
+        if (op.operation === "add_tag") ok = op.tagId !== undefined && addTagToSession(username, sessionId, op.tagId);
         if (op.operation === "remove_tag") { db.prepare("DELETE FROM session_tags WHERE username=? AND session_id=? AND tag_id=?").run(username, sessionId, op.tagId); ok = true; }
         if (ok) updated.push(sessionId); else failed.push({ sessionId, error: "failed" });
       }
@@ -1352,7 +1472,7 @@ export async function GET(req: Request) {
 
 - [ ] **Step 3: Extend session PATCH for metadata**
 
-Modify `app/api/sessions/[id]/route.ts` PATCH body parsing so `name` remains optional if metadata is present. After `checkSessionOwnership`, call `getSessionIndexStore().setSessionMetadata(guard.username, id, patch)` for `favorite`, `archived`, and `customTitle`.
+Modify `app/api/sessions/[id]/route.ts` PATCH body parsing so `name` remains optional if metadata is present. After `checkSessionOwnership`, write SQLite metadata first, then append `.jsonl` session_info if `name` is present.
 
 Use this validation rule:
 
@@ -1363,6 +1483,35 @@ const body = await req.json() as PatchBody;
 const hasMetadata = typeof body.favorite === "boolean" || typeof body.archived === "boolean" || typeof body.customTitle === "string" || body.customTitle === null;
 if (body.name !== undefined && typeof body.name !== "string") return NextResponse.json({ error: "name must be a string" }, { status: 400 });
 if (!hasMetadata && body.name === undefined) return NextResponse.json({ error: "no patch fields provided" }, { status: 400 });
+```
+
+Use this failure contract:
+
+```ts
+if (hasMetadata) {
+  const ok = getSessionIndexStore().setSessionMetadata(guard.username, id, {
+    favorite: body.favorite,
+    archived: body.archived,
+    customTitle: body.customTitle,
+  });
+  if (!ok) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+}
+
+if (body.name !== undefined) {
+  try {
+    await withCwdOperationGuard(guard.cwd, async () => {
+      const sm = SessionManager.open(guard.filePath);
+      sm.appendSessionInfo(body.name!.trim());
+    });
+  } catch (error) {
+    const payload = hasMetadata
+      ? { error: String(error), partialFailure: "metadata_saved_name_failed" }
+      : { error: String(error) };
+    return NextResponse.json(payload, { status: 500 });
+  }
+}
+
+return NextResponse.json({ ok: true });
 ```
 
 - [ ] **Step 4: Add search route**
@@ -1417,7 +1566,7 @@ git commit -m "feat: serve sessions from sqlite index"
 
 **Files:**
 - Create: `app/api/workspaces/route.ts`
-- Create: `app/api/workspaces/[id]/route.ts`
+- Create: `app/api/workspaces/[cwd]/route.ts`
 - Create: `app/api/tags/route.ts`
 - Create: `app/api/tags/[id]/route.ts`
 - Modify: `lib/session-index/store.ts`
@@ -1429,25 +1578,25 @@ Extend `createSessionIndexStore` with:
 ```ts
 listWorkspaces(username: string) {
   return db.prepare(`
-    SELECT w.id, w.cwd, COALESCE(uwm.display_name, w.display_name) AS displayName,
+    SELECT w.cwd, COALESCE(uwm.display_name, w.display_name) AS displayName,
            w.session_count AS sessionCount, w.last_active_at AS lastActiveAt,
            COALESCE(uwm.pinned,0) AS pinned, uwm.last_opened_at AS lastOpenedAt
     FROM workspaces w
-    LEFT JOIN user_workspace_metadata uwm ON uwm.username=? AND uwm.workspace_id=w.id
+    LEFT JOIN user_workspace_metadata uwm ON uwm.username=? AND uwm.cwd=w.cwd
     WHERE w.owner_username=?
     ORDER BY COALESCE(uwm.pinned,0) DESC, uwm.last_opened_at DESC, w.last_active_at DESC
   `).all(username, username);
 },
 
-setWorkspaceMetadata(username: string, workspaceId: number, patch: { pinned?: boolean; displayName?: string | null }) {
-  const workspace = db.prepare("SELECT id FROM workspaces WHERE id=? AND owner_username=?").get(workspaceId, username);
+setWorkspaceMetadata(username: string, cwd: string, patch: { pinned?: boolean; displayName?: string | null }) {
+  const workspace = db.prepare("SELECT cwd FROM workspaces WHERE cwd=? AND owner_username=?").get(cwd, username);
   if (!workspace) return false;
-  db.prepare(`INSERT INTO user_workspace_metadata (username, workspace_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(username, workspace_id) DO NOTHING`).run(username, workspaceId, nowIso());
-  const current = db.prepare("SELECT pinned, display_name FROM user_workspace_metadata WHERE username=? AND workspace_id=?").get(username, workspaceId) as { pinned: number; display_name: string | null };
-  db.prepare("UPDATE user_workspace_metadata SET pinned=?, display_name=?, updated_at=? WHERE username=? AND workspace_id=?").run(
+  db.prepare(`INSERT INTO user_workspace_metadata (username, cwd, updated_at) VALUES (?, ?, ?) ON CONFLICT(username, cwd) DO NOTHING`).run(username, cwd, nowIso());
+  const current = db.prepare("SELECT pinned, display_name FROM user_workspace_metadata WHERE username=? AND cwd=?").get(username, cwd) as { pinned: number; display_name: string | null };
+  db.prepare("UPDATE user_workspace_metadata SET pinned=?, display_name=?, updated_at=? WHERE username=? AND cwd=?").run(
     patch.pinned === undefined ? current.pinned : boolToInt(patch.pinned),
     patch.displayName === undefined ? current.display_name : patch.displayName,
-    nowIso(), username, workspaceId,
+    nowIso(), username, cwd,
   );
   return true;
 },
@@ -1487,7 +1636,7 @@ export async function GET(req: Request) {
 
 - [ ] **Step 3: Create workspace metadata route**
 
-Create `app/api/workspaces/[id]/route.ts` with PATCH support. Parse `id` as integer; require body `pinned?: boolean`, `displayName?: string | null`; return 404 if store returns false.
+Create `app/api/workspaces/[cwd]/route.ts` with PATCH support. Decode the route param with `decodeURIComponent`; require body `pinned?: boolean`, `displayName?: string | null`; return 404 if store returns false.
 
 - [ ] **Step 4: Create tags collection route**
 
@@ -1621,6 +1770,10 @@ describe("session sidebar utils", () => {
     expect(shortenCwd("/home/hsops/pi-users/alice/project", "/home/hsops")).toBe(".../alice/project".replace("...", "…"));
   });
 
+  it("shortens non-home cwd using the last two path segments", () => {
+    expect(shortenCwd("/srv/apps/pi-web-auth", "/home/hsops")).toBe("…/pi-web-auth");
+  });
+
   it("builds tree through nearest existing ancestor", () => {
     const tree = buildSessionTree([session("root"), session("child", "root")]);
     expect(tree).toHaveLength(1);
@@ -1652,7 +1805,6 @@ export interface SessionTreeNode {
 export type ArchiveFilter = "exclude" | "include" | "only";
 
 export interface WorkspaceSummary {
-  id: number;
   cwd: string;
   displayName: string | null;
   sessionCount: number;
@@ -1778,7 +1930,7 @@ interface Props {
   customPathValue: string;
   onToggleOpen: () => void;
   onSelect: (cwd: string) => void;
-  onPin: (workspaceId: number, pinned: boolean) => void;
+  onPin: (cwd: string, pinned: boolean) => void;
   onDefaultCwd: () => void;
   onCustomPathOpen: () => void;
   onCustomPathValueChange: (value: string) => void;
@@ -1796,11 +1948,11 @@ export function WorkspaceSwitcher(props: Props) {
       {props.open && (
         <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.10)", overflow: "hidden" }}>
           {props.workspaces.map((workspace) => (
-            <div key={workspace.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderBottom: "1px solid var(--border)", background: workspace.cwd === props.selectedCwd ? "var(--bg-selected)" : "none" }}>
+            <div key={workspace.cwd} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderBottom: "1px solid var(--border)", background: workspace.cwd === props.selectedCwd ? "var(--bg-selected)" : "none" }}>
               <button onClick={() => props.onSelect(workspace.cwd)} style={{ flex: 1, minWidth: 0, background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", textAlign: "left", fontSize: 11, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={workspace.cwd}>
                 {workspace.displayName || shortenCwd(workspace.cwd, props.homeDir)}
               </button>
-              <button onClick={() => props.onPin(workspace.id, !Boolean(workspace.pinned))} title={workspace.pinned ? "Unpin workspace" : "Pin workspace"} style={{ width: 24, height: 24, border: "1px solid var(--border)", background: workspace.pinned ? "var(--bg-selected)" : "var(--bg-hover)", color: workspace.pinned ? "var(--accent)" : "var(--text-muted)", borderRadius: 6, cursor: "pointer" }}>★</button>
+              <button onClick={() => props.onPin(workspace.cwd, !Boolean(workspace.pinned))} title={workspace.pinned ? "Unpin workspace" : "Pin workspace"} style={{ width: 24, height: 24, border: "1px solid var(--border)", background: workspace.pinned ? "var(--bg-selected)" : "var(--bg-hover)", color: workspace.pinned ? "var(--accent)" : "var(--text-muted)", borderRadius: 6, cursor: "pointer" }}>★</button>
             </div>
           ))}
           <button onClick={props.onDefaultCwd} style={{ width: "100%", padding: "8px 10px", background: "none", border: "none", color: "var(--text-muted)", textAlign: "left", cursor: "pointer", fontSize: 12 }}>Use default directory</button>
@@ -1842,7 +1994,7 @@ Call it with `useEffect(() => { void loadWorkspaces(); }, [loadWorkspaces, refre
 
 - [ ] **Step 3: Replace cwd picker JSX**
 
-Replace the current cwd dropdown block with `WorkspaceSwitcher`. Keep custom path and default cwd behavior. When selecting a workspace, call `setSelectedCwd(cwd)` and `PATCH /api/workspaces/[id]` indirectly only for pin; do not call `useRecentCwds().addCwd` for server workspaces.
+Replace the current cwd dropdown block with `WorkspaceSwitcher`. Keep custom path and default cwd behavior. When selecting a workspace, call `setSelectedCwd(cwd)`. For pinning, call `PATCH /api/workspaces/${encodeURIComponent(cwd)}`; do not call `useRecentCwds().addCwd` for server workspaces.
 
 - [ ] **Step 4: Verify**
 
@@ -1893,7 +2045,7 @@ beforeEach(() => {
     const value = String(url);
     if (value.startsWith("/api/sessions/search")) return new Response(JSON.stringify({ results: [], indexStatus: "ready", pagination: { total: 0, page: 1, pageSize: 20 } }), { status: 200 });
     if (value.startsWith("/api/sessions")) return new Response(JSON.stringify({ sessions: [{ id: "s1", path: "/tmp/s1", cwd: "/p", created: "2026-07-15T00:00:00.000Z", modified: "2026-07-15T00:00:00.000Z", messageCount: 1, firstMessage: "hello", favorite: false, archived: false }], indexStatus: "ready", pagination: { total: 1, page: 1, pageSize: 100 } }), { status: 200 });
-    if (value.startsWith("/api/workspaces")) return new Response(JSON.stringify({ workspaces: [{ id: 1, cwd: "/p", displayName: null, sessionCount: 1, lastActiveAt: "2026-07-15T00:00:00.000Z", pinned: false, lastOpenedAt: null }] }), { status: 200 });
+    if (value.startsWith("/api/workspaces")) return new Response(JSON.stringify({ workspaces: [{ cwd: "/p", displayName: null, sessionCount: 1, lastActiveAt: "2026-07-15T00:00:00.000Z", pinned: false, lastOpenedAt: null }] }), { status: 200 });
     if (value.startsWith("/api/tags")) return new Response(JSON.stringify({ tags: [] }), { status: 200 });
     if (value.startsWith("/api/home")) return new Response(JSON.stringify({ home: "/home/hsops" }), { status: 200 });
     if (value.startsWith("/api/default-cwd")) return new Response(JSON.stringify({ cwd: "/p" }), { status: 200 });
