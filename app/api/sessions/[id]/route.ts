@@ -15,7 +15,7 @@ import {
   withCwdOperationGuard,
 } from "@/lib/rpc-manager";
 import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
-import { getSessionIndexStore } from "@/lib/session-index/service";
+import { deleteIndexedSessionAfterFileDelete, getSessionIndexStore, scheduleIndexSessionFile } from "@/lib/session-index/service";
 
 function ownershipDenied(status: 401 | 404): Response {
   return NextResponse.json({ error: sessionGuardMessage(status) }, { status });
@@ -123,6 +123,7 @@ export async function PATCH(
           const sm = SessionManager.open(guard.filePath);
           sm.appendSessionInfo(body.name!.trim());
         });
+        scheduleIndexSessionFile(guard.filePath);
       } catch (error) {
         const payload = hasMetadata
           ? { error: String(error), partialFailure: "metadata_saved_name_failed" }
@@ -183,6 +184,7 @@ export async function DELETE(
       await getRpcSession(id)?.shutdown("quit");
       unlinkSync(filePath);
       invalidateSessionPathCache(id);
+      deleteIndexedSessionAfterFileDelete(id, guard.username);
       return NextResponse.json({ ok: true });
     } finally {
       unmarkRootDeleting(guard.cwd);

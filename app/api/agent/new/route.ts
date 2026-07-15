@@ -9,6 +9,7 @@ import { getUserModelPreference } from "@/lib/auth/model-preferences";
 import { applyNewSessionModel } from "@/lib/model-selection";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
+import { scheduleIndexSessionFile } from "@/lib/session-index/service";
 
 function drainingResponse() {
   const admission = getProcessLifecycle().agentAdmission();
@@ -69,6 +70,7 @@ export async function POST(req: Request) {
         await session.send({ type: "set_thinking_level", level: thinkingLevel });
       }
       const result = await session.send(promptCommand);
+      scheduleIndexSessionFile(session.sessionFile);
       return { success: true, sessionId: realSessionId, data: result };
     });
 

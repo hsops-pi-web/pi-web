@@ -9,6 +9,8 @@ import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-g
 import { setUserModelPreference } from "@/lib/auth/model-preferences";
 import { switchModelAndRemember } from "@/lib/model-selection";
 import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
+import { scheduleIndexSessionFile } from "@/lib/session-index/service";
+import { resolveSessionPath } from "@/lib/session-reader";
 
 function drainingResponse() {
   const admission = getProcessLifecycle().agentAdmission();
@@ -50,15 +52,23 @@ export async function POST(
         if (!provider || !modelId) {
           throw new Error("provider and modelId are required");
         }
-        return switchModelAndRemember(
+        const data = await switchModelAndRemember(
           session,
           guard.username,
           provider,
           modelId,
           setUserModelPreference
         );
+        scheduleIndexSessionFile(session.sessionFile || guard.filePath);
+        return data;
       }
-      return session.send(body);
+      const data = await session.send(body);
+      scheduleIndexSessionFile(session.sessionFile || guard.filePath);
+      if (body.type === "fork" && data && typeof data === "object" && "newSessionId" in data) {
+        const forkedPath = await resolveSessionPath(String((data as { newSessionId: unknown }).newSessionId));
+        if (forkedPath) scheduleIndexSessionFile(forkedPath);
+      }
+      return data;
     });
 
     return NextResponse.json({ success: true, data: result });
