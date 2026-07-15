@@ -48,3 +48,6 @@ next-env.d.ts
 
 # temporary UI mockup previews (mockup 预览临时目录)
 /.preview/
+
+# local git worktrees
+/.worktrees/
