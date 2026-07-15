@@ -15,6 +15,7 @@ import {
   withCwdOperationGuard,
 } from "@/lib/rpc-manager";
 import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
+import { getSessionIndexStore } from "@/lib/session-index/service";
 
 function ownershipDenied(status: 401 | 404): Response {
   return NextResponse.json({ error: sessionGuardMessage(status) }, { status });
@@ -85,24 +86,51 @@ export async function GET(
   }
 }
 
-// PATCH /api/sessions/[id]  body: { name: string }
+type PatchBody = {
+  name?: string;
+  favorite?: boolean;
+  archived?: boolean;
+  customTitle?: string | null;
+};
+
+// PATCH /api/sessions/[id]  body: { name?: string, favorite?: boolean, archived?: boolean, customTitle?: string | null }
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   try {
-    const { name } = await req.json() as { name?: string };
-    if (typeof name !== "string") {
-      return NextResponse.json({ error: "name is required" }, { status: 400 });
-    }
+    const body = await req.json() as PatchBody;
+    const hasMetadata = typeof body.favorite === "boolean" || typeof body.archived === "boolean" || typeof body.customTitle === "string" || body.customTitle === null;
+    if (body.name !== undefined && typeof body.name !== "string") return NextResponse.json({ error: "name must be a string" }, { status: 400 });
+    if (!hasMetadata && body.name === undefined) return NextResponse.json({ error: "no patch fields provided" }, { status: 400 });
+
     const guard = await checkSessionOwnership(req, id);
     if (!guard.ok) return ownershipDenied(guard.status);
 
-    await withCwdOperationGuard(guard.cwd, async () => {
-      const sm = SessionManager.open(guard.filePath);
-      sm.appendSessionInfo(name.trim());
-    });
+    if (hasMetadata) {
+      const ok = getSessionIndexStore().setSessionMetadata(guard.username, id, {
+        favorite: body.favorite,
+        archived: body.archived,
+        customTitle: body.customTitle,
+      });
+      if (!ok) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    if (body.name !== undefined) {
+      try {
+        await withCwdOperationGuard(guard.cwd, async () => {
+          const sm = SessionManager.open(guard.filePath);
+          sm.appendSessionInfo(body.name!.trim());
+        });
+      } catch (error) {
+        const payload = hasMetadata
+          ? { error: String(error), partialFailure: "metadata_saved_name_failed" }
+          : { error: String(error) };
+        return NextResponse.json(payload, { status: 500 });
+      }
+    }
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

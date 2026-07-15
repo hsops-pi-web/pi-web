@@ -181,6 +181,19 @@ export interface SessionInfo {
   messageCount: number;
   firstMessage: string;
   parentSessionId?: string; // set if this session was forked from another
+  favorite?: boolean;
+  archived?: boolean;
+  customTitle?: string | null;
+  tags?: { id: number; name: string; color: string | null }[];
+  orphaned?: boolean;
+  missing?: boolean;
+  indexError?: string | null;
+}
+
+export interface PaginatedSessionsResponse {
+  sessions: SessionInfo[];
+  indexStatus: "ready" | "building" | "stale" | "error";
+  pagination: { total: number; page: number; pageSize: number };
 }
 
 export interface SessionContext {
