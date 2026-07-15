@@ -54,6 +54,9 @@
 - 用户个人元数据按用户保存：收藏、标签、归档、工作区 pin、最近工作区互不污染。
 - `.jsonl` 是原始会话事实来源；SQLite 是查询索引和用户个人会话元数据事实来源。
 - SQLite 中索引表可重建；用户个人元数据表必须纳入备份策略，不能被当作可丢弃缓存。
+- 权限分页采用索引期归属收敛：索引器用文件系统 realpath/canonicalize 规则计算
+  `owner_username`，查询期信任该字段并用 `WHERE owner_username=?` 下推过滤、分页和 total。
+- 不采用“SQL 分页后再逐条 realpath 过滤”的方案；该方案会导致每页数量不足且 total 不准确。
 
 ## 4. 数据存储边界
 
@@ -63,7 +66,8 @@
 /home/hsops/.pi-web-auth/session-index.db
 ```
 
-实现应通过现有 auth 数据目录常量派生该路径，避免硬编码多个数据根。该文件必须满足：
+实现应先从 `lib/auth/db.ts` 提取共享数据目录常量或 helper，让 auth 数据库和 session index
+共用同一个数据根，避免硬编码多个数据目录。该文件必须满足：
 
 - 随生产数据备份一起纳入备份清单。
 - 权限与 auth 数据同级保护，不对其他用户开放读写。
@@ -112,8 +116,14 @@ CREATE TABLE sessions (
 );
 ```
 
-`owner_username` 用于索引归属和后续统计。权限仍以当前请求用户、cwd 所有权和现有
-`resolveExistingAndCheck()` 规则为准，不能只依赖该字段。
+`owner_username` 是查询期权限过滤、分页和 total 的依据。它必须在索引期通过文件系统规则计算，
+不能由客户端或 session header 声称。计算规则：对每个已知用户根执行 `resolveSessionOwnership(cwd,
+username)` 或等价 canonicalize 判断，命中的唯一用户写入 `owner_username`；cwd 为空、无法归属、
+归属不唯一或不在任何 `pi-users/<username>` 下时写入 `NULL`，普通用户查询默认不可见。
+
+这个决策把 symlink 和路径逃逸风险收敛到索引期：索引期做真实路径归属判断，查询期用 SQL
+`WHERE owner_username=?` 下推过滤、排序、分页和 total。若 cwd 的真实归属后来变化，mtime/周期扫描
+必须重新计算 owner 并更新索引。
 
 ### `session_messages`
 
@@ -241,27 +251,40 @@ CREATE VIRTUAL TABLE session_messages_fts USING fts5(
 如果运行环境的 SQLite 不支持 FTS5，功能仍应启动，但全文搜索 API 返回降级状态或使用受限的
 `LIKE` 查询。正式验收目标是 FTS5 可用。
 
+FTS5 external content 表不会自动随 `session_messages` 同步。实现必须二选一并固定：要么创建
+insert/update/delete trigger 维护 `session_messages_fts`，要么在索引器事务中手动维护 FTS 影子行，
+删除时使用 FTS5 `delete` 命令语义。重索引测试必须覆盖主表和 FTS 一致性。
+
 ## 6. 索引同步
 
 新增会话索引服务模块，建议放在 `lib/session-index/` 下，提供清晰边界：
 
 - `db.ts`：打开 SQLite、迁移 schema、事务封装。
-- `scanner.ts`：扫描 session 文件、检测 mtime、发现新增/缺失文件。
+- `scanner.ts`：扫描 session 文件、只 stat 检测 mtime、发现新增/缺失文件。
 - `indexer.ts`：解析单个 `.jsonl`，写入 `sessions`、`session_messages` 和 FTS。
 - `queries.ts`：会话列表、搜索、工作区、标签查询。
 - `metadata.ts`：收藏、标签、归档、工作区 pin、最近访问写入。
-- `permissions.ts`：复用现有 cwd 权限检查，避免查询层漏过滤。
+- `permissions.ts`：索引期计算 `owner_username`，并在元数据写入前校验目标 session/workspace
+  属于当前用户。
 
 同步规则：
 
 1. 应用启动后不阻塞页面启动，但首次 `/api/sessions` 需要确保数据库 schema 已迁移。
 2. 若数据库为空或 `index_state` 表示从未扫描，触发后台初次索引。
-3. 每次会话列表查询前，可做轻量 mtime 检测或使用节流扫描，发现变更后局部重索引。
-4. 新会话创建、rename、fork、delete、context navigation 后，触发目标 session 或相关 session 的局部重索引。
-5. 单个 `.jsonl` 解析失败时，把 `orphaned=1` 和 `index_error` 写入 `sessions`，不阻塞其他会话。
-6. 文件消失时标记 `missing=1`，并从默认列表隐藏，保留用户个人元数据，避免临时文件系统问题造成收藏、标签或归档丢失。
-7. 只有用户通过 Web API 明确删除会话，且服务端确认 `.jsonl` 删除成功后，才允许删除该 session 的索引记录和关联用户元数据。
-8. 全量重建只重建索引派生字段和 FTS，不清空用户个人元数据表。
+3. mtime 检测阶段只能 `readdir` 和 `stat`，不得调用 `SessionManager.listAll()` 或解析所有 `.jsonl`。
+   只有新增、mtime 变化或先前索引失败的文件进入解析和重索引。
+4. 索引器不能复用 `SessionManager.listAll()` 作为文件发现来源，因为 listAll 会跳过 malformed
+   session，导致 orphaned 文件永远不可见。scanner 必须自己枚举 session 目录并逐文件解析。
+5. 索引每个 session 时计算 `owner_username`：从 cwd 反推落在哪个 `pi-users/<username>` 下，复用
+   `resolveSessionOwnership()` 或等价 canonicalize 逻辑；无法归属时写入 `NULL`。
+6. 新会话创建、rename、fork、delete、context navigation 后，触发目标 session 或相关 session 的局部重索引。
+7. 单个 `.jsonl` 解析失败时，把 `orphaned=1` 和 `index_error` 写入 `sessions`，不阻塞其他会话。
+8. 文件消失时标记 `missing=1`，并从默认列表隐藏，保留用户个人元数据，避免临时文件系统问题造成收藏、标签或归档丢失。
+9. 只有用户通过 Web API 明确删除会话，且服务端确认 `.jsonl` 删除成功后，才允许删除该 session 的索引记录和关联用户元数据。
+10. 全量重建只重建索引派生字段和 FTS，不清空用户个人元数据表。
+11. `lib/auth/delete-user.ts` 必须集成 session index：删除用户时，在物理删除该用户 jsonl 后同步删除
+    对应 `sessions` 索引行，并清理该 username 的 `user_session_metadata`、`tags`、`session_tags`、
+    `user_workspace_metadata`。该清理与现有 auth 用户删除事务失败处理保持一致。
 
 并发要求：
 
@@ -274,7 +297,8 @@ CREATE VIRTUAL TABLE session_messages_fts USING fts5(
 
 ### `GET /api/sessions`
 
-从 SQLite 返回当前用户可访问的会话列表，支持：
+从 SQLite 返回当前用户可访问的会话列表。权限过滤在 SQL 层下推为 `owner_username=<current user>`，
+因此 page/pageSize 和 total 必须精确。支持：
 
 ```text
 q=<keyword>
@@ -422,7 +446,9 @@ UI 必须适配桌面和移动宽度。会话行、标签、工具条和搜索�
 ## 9. 权限与安全
 
 - 所有 API 必须先要求登录。
-- 会话查询必须按当前用户可访问 cwd 过滤，继续复用现有 `resolveExistingAndCheck()` 语义。
+- 会话查询必须按索引期计算出的 `owner_username` 在 SQL 层过滤，保证分页和 total 准确。
+- 索引期 owner 计算必须复用现有 realpath/canonicalize 归属语义，防止 symlink cwd 混入其他用户根。
+- 对 `owner_username IS NULL` 的会话，普通用户默认不可见；后续管理员可观测性若需要展示，必须走独立管理员只读规则。
 - 收藏、标签、归档和工作区 pin 写入前必须验证目标 session/workspace 对当前用户可访问。
 - 普通用户不能通过 session id 猜测读取其他用户会话元数据。
 - 标签名需要长度限制和字符规范化，避免极端输入破坏 UI 或查询。
@@ -453,7 +479,12 @@ UI 必须适配桌面和移动宽度。会话行、标签、工具条和搜索�
 - SQLite schema 迁移幂等。
 - 单个 `.jsonl` 索引写入 `sessions`、`session_messages` 和 FTS。
 - malformed header 标记 orphaned，不阻塞其他会话。
+- scanner 不复用 `SessionManager.listAll()`，malformed `.jsonl` 能被发现并写入 orphaned 索引行。
+- owner_username 从 cwd 和用户根反推，正常用户根内会话可见，无法归属会话普通用户不可见。
+- SQL 层 `WHERE owner_username=?` 下的 page/pageSize 和 total 准确，不出现分页后应用层过滤导致的短页。
 - mtime 变化触发局部重索引。
+- mtime 检测只 stat 不解析未变化文件。
+- FTS5 external content 与 `session_messages` 在新增、重索引和删除后保持一致。
 - 缺失文件标记 missing，默认列表隐藏。
 - 用户 A 和用户 B 对同一 session 的 favorite、archived、tags 互不影响。
 - 标签 CRUD 和 session tag 关系按 username 隔离。
@@ -461,7 +492,7 @@ UI 必须适配桌面和移动宽度。会话行、标签、工具条和搜索�
 - `/api/sessions` 的 cwd、tag、favorite、archived、sort、pagination 过滤正确。
 - `/api/sessions/search` 只返回当前用户可访问结果，snippet 和 entryId 正确。
 - 批量操作逐项鉴权，部分失败返回明确结果。
-- 删除用户时清理该用户个人标签和元数据，不能影响其他用户。
+- 删除用户时 `lib/auth/delete-user.ts` 清理该用户个人标签、元数据和已删除 jsonl 对应的 session index，不能影响其他用户。
 - 前端 sidebar smoke test 覆盖搜索、收藏、标签、归档、工作区 pin 和批量操作。
 
 ### 隔离验收
