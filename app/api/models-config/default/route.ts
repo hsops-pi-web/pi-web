@@ -5,7 +5,10 @@ import {
   SettingsManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import { requireAdmin } from "@/lib/auth/session";
+import { normalizeModelsConfigFile } from "@/lib/models-config";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +28,7 @@ export async function PUT(req: Request) {
     }
 
     const agentDir = getAgentDir();
+    normalizeModelsConfigFile(join(agentDir, "models.json"), { existsSync, readFileSync, writeFileSync });
     const registry = ModelRegistry.create(AuthStorage.create());
     const model = registry.find(provider, modelId);
     if (!model || !registry.hasConfiguredAuth(model)) {

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { requireAdmin } from "@/lib/auth/session";
+import { normalizeModelsConfig, normalizeModelsConfigFile } from "@/lib/models-config";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ function readModelsJson(): Record<string, unknown> {
   const path = getModelsPath();
   if (!existsSync(path)) return { providers: {} };
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    return normalizeModelsConfigFile(path, { existsSync, readFileSync, writeFileSync });
   } catch {
     return { providers: {} };
   }
@@ -39,7 +40,8 @@ export async function PUT(req: Request) {
 
   try {
     const body = await req.json() as Record<string, unknown>;
-    writeModelsJson(body);
+    const { config } = normalizeModelsConfig(body);
+    writeModelsJson(config);
     // Model registry refreshes on each /api/models request (no local cache to invalidate)
     return NextResponse.json({ success: true });
   } catch (error) {

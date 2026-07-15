@@ -1,6 +1,6 @@
 import { AuthStorage, ModelRegistry, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
@@ -14,6 +14,7 @@ import {
   resolveEffectiveDefault,
   type ModelRef,
 } from "@/lib/auth/model-preferences";
+import { normalizeModelsConfigFile } from "@/lib/models-config";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,8 @@ export async function GET(req: Request) {
 
   try {
     const agentDir = getAgentDir();
+    const modelsConfigPath = join(agentDir, "models.json");
+    normalizeModelsConfigFile(modelsConfigPath, { existsSync, readFileSync, writeFileSync });
     const authStorage = AuthStorage.create();
     const registry = ModelRegistry.create(authStorage);
     const available = registry.getAvailable();
@@ -60,7 +63,7 @@ export async function GET(req: Request) {
 
     let configuredModelKeys: string[] = [];
     try {
-      const modelsConfig = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8"));
+      const modelsConfig = JSON.parse(readFileSync(modelsConfigPath, "utf8"));
       configuredModelKeys = getConfiguredModelKeys(modelsConfig);
     } catch {
       // Missing or invalid models.json leaves the registry order unchanged.
