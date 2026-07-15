@@ -58,6 +58,29 @@ test("indexes a valid session with owner, workspace, messages, first message, an
   }
 });
 
+test("indexes the latest session_info name as session title", () => {
+  const userRoot = getUserRoot("idxrename");
+  const cwd = join(userRoot, "project");
+  mkdirSync(cwd, { recursive: true });
+  const file = join(home, "renamed.jsonl");
+  writeFileSync(file, [
+    JSON.stringify({ type: "session", id: "renamed", timestamp: "2026-07-15T00:00:00.000Z", cwd }),
+    JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-07-15T00:00:01.000Z", message: { role: "user", content: "original first message" } }),
+    JSON.stringify({ type: "session_info", id: "n1", parentId: "m1", timestamp: "2026-07-15T00:00:02.000Z", name: "Old title" }),
+    JSON.stringify({ type: "session_info", id: "n2", parentId: "n1", timestamp: "2026-07-15T00:00:03.000Z", name: "Renamed title" }),
+  ].join("\n"));
+
+  try {
+    indexSessionFile(db, { path: file, mtimeMs: 150 }, ["idxrename"]);
+
+    const row = db.prepare("SELECT title, first_message FROM sessions WHERE id='renamed'").get() as { title: string | null; first_message: string };
+    assert.equal(row.title, "Renamed title");
+    assert.equal(row.first_message, "original first message");
+  } finally {
+    rmSync(userRoot, { recursive: true, force: true });
+  }
+});
+
 test("parentSession path is backfilled to parent_session_id", () => {
   const userRoot = getUserRoot("idxparent");
   const cwd = join(userRoot, "project");

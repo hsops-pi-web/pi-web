@@ -705,6 +705,8 @@ function SessionItem({
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -714,25 +716,48 @@ function SessionItem({
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setRenameValue(session.name ?? "");
+    setRenameError(null);
     setRenaming(true);
     setTimeout(() => inputRef.current?.select(), 0);
   }, [session.name]);
 
   const commitRename = useCallback(async () => {
     const name = renameValue.trim();
-    setRenaming(false);
+    if (renameSaving) return;
     if (name === (session.name ?? "")) return;
+    setRenameSaving(true);
+    setRenameError(null);
     try {
-      await authFetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      const res = await authFetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
+      if (!res.ok) {
+        let message = `Rename failed (${res.status})`;
+        try {
+          const data = await res.json() as { error?: string };
+          if (data.error) message = data.error;
+        } catch {
+          // Keep status-based message when response is not JSON.
+        }
+        setRenameError(message);
+        return;
+      }
+      setRenaming(false);
       onRenamed?.();
-    } catch {
-      // ignore
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRenameSaving(false);
     }
-  }, [renameValue, session.id, session.name, onRenamed]);
+  }, [renameSaving, renameValue, session.id, session.name, onRenamed]);
+
+  const cancelRename = useCallback(() => {
+    if (renameSaving) return;
+    setRenaming(false);
+    setRenameError(null);
+  }, [renameSaving]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -826,28 +851,62 @@ function SessionItem({
         </>
       ) : renaming ? (
         /* ── Rename: input fills the same row ── */
-        <input
-          ref={inputRef}
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") setRenaming(false);
-          }}
-          autoFocus
-          style={{
-            flex: 1,
-            fontSize: 12,
-            padding: "5px 8px",
-            border: "1px solid var(--accent)",
-            borderRadius: 5,
-            outline: "none",
-            background: "var(--bg)",
-            color: "var(--text)",
-            height: 30,
-          }}
-        />
+        <>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <input
+              ref={inputRef}
+              aria-label="Session name"
+              value={renameValue}
+              disabled={renameSaving}
+              onChange={(e) => { setRenameValue(e.target.value); setRenameError(null); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commitRename();
+                }
+                if (e.key === "Escape") cancelRename();
+              }}
+              autoFocus
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                fontSize: 12,
+                padding: "5px 8px",
+                border: `1px solid ${renameError ? "#ef4444" : "var(--accent)"}`,
+                borderRadius: 5,
+                outline: "none",
+                background: "var(--bg)",
+                color: "var(--text)",
+                height: 30,
+              }}
+            />
+            {renameError && (
+              <div style={{ marginTop: 2, fontSize: 10, color: "#ef4444", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {renameError}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => { event.stopPropagation(); void commitRename(); }}
+            disabled={renameSaving}
+            title="Save rename"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, padding: 0, flexShrink: 0, background: "var(--bg-selected)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--accent)", cursor: renameSaving ? "default" : "pointer" }}
+          >
+            {renameSaving ? "…" : "✓"}
+          </button>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => { event.stopPropagation(); cancelRename(); }}
+            disabled={renameSaving}
+            title="Cancel rename"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, padding: 0, flexShrink: 0, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: renameSaving ? "default" : "pointer" }}
+          >
+            ×
+          </button>
+        </>
       ) : (
         /* ── Normal view ── */
         <>

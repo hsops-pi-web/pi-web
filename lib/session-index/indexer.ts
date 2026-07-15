@@ -122,7 +122,7 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
     const header = JSON.parse(lines[0] ?? "null") as { type?: string; id?: string; timestamp?: string; cwd?: string; parentSession?: string };
     if (header?.type !== "session" || !header.id) throw new Error("Invalid session header");
 
-    const entries = lines.slice(1).map((line) => JSON.parse(line)) as Array<{ type?: string; id?: string; timestamp?: string; message?: { role?: string } & Record<string, unknown> }>;
+    const entries = lines.slice(1).map((line) => JSON.parse(line)) as Array<{ type?: string; id?: string; timestamp?: string; name?: unknown; message?: { role?: string } & Record<string, unknown> }>;
     const messageRows = entries
       .filter((entry) => entry.type === "message" && entry.message)
       .map((entry, index) => ({
@@ -135,6 +135,11 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
       .filter((row) => row.text.length > 0);
 
     const firstUser = messageRows.find((row) => row.role === "user")?.text ?? "(no messages)";
+    const latestTitle = entries
+      .filter((entry) => entry.type === "session_info" && typeof entry.name === "string")
+      .map((entry) => String(entry.name).trim())
+      .filter(Boolean)
+      .at(-1) ?? null;
     const owner = computeSessionOwner(header.cwd ?? "", usernames);
     const parentSessionId = header.parentSession
       ? (db.prepare("SELECT id FROM sessions WHERE path=?").get(header.parentSession) as { id: string } | undefined)?.id ?? null
@@ -148,6 +153,7 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
           path=excluded.path,
           cwd=excluded.cwd,
           owner_username=excluded.owner_username,
+          title=excluded.title,
           first_message=excluded.first_message,
           created_at=excluded.created_at,
           modified_at=excluded.modified_at,
@@ -164,7 +170,7 @@ export function indexSessionFile(db: Database.Database, file: ScannedSessionFile
         path: file.path,
         cwd: header.cwd ?? "",
         owner,
-        title: null,
+        title: latestTitle,
         firstMessage: firstUser,
         createdAt: header.timestamp ?? indexedAt,
         modifiedAt: indexedAt,
