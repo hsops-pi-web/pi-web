@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionIndexDb, migrateSessionIndexDb } from "../../../lib/session-index/db.ts";
-import { cleanupDeletedUserSessionIndex } from "../../../lib/session-index/service.ts";
+import { cleanupDeletedUserSessionIndex } from "../../../lib/session-index/cleanup.ts";
 
 let home = "";
 let db: Database.Database;

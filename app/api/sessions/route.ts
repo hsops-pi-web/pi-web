@@ -1,17 +1,8 @@
 import { NextResponse } from "next/server";
+import { enumParam, intParam } from "@/lib/api-params";
 import { getSessionUser } from "@/lib/auth/session";
 import { getSessionIndexStore } from "@/lib/session-index/service";
 import type { ArchivedFilter, OrphanedFilter, SessionSort } from "@/lib/session-index/types";
-
-function intParam(value: string | null, fallback: number, min: number, max: number): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
-
-function enumParam<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
-  return allowed.includes(value as T) ? (value as T) : fallback;
-}
 
 export async function GET(req: Request) {
   try {
