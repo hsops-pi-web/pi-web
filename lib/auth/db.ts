@@ -1,8 +1,7 @@
 import Database from "better-sqlite3";
-import os from "os";
-import path from "path";
 import { mkdirSync } from "fs";
 import { SUPER_ADMIN } from "./roles";
+import { getAuthDbPath, getPiWebAuthDataDir } from "./data-dir";
 
 declare global {
   var __piAuthDb: Database.Database | undefined;
@@ -10,9 +9,9 @@ declare global {
 
 export function getDb(): Database.Database {
   if (globalThis.__piAuthDb) return globalThis.__piAuthDb;
-  const dir = path.join(os.homedir(), ".pi-web-auth");
+  const dir = getPiWebAuthDataDir();
   mkdirSync(dir, { recursive: true });
-  const db = new Database(path.join(dir, "auth.db"));
+  const db = new Database(getAuthDbPath());
   db.pragma("journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
