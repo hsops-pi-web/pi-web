@@ -5,8 +5,9 @@ import type { SessionInfo } from "@/lib/types";
 import { FileExplorer } from "./FileExplorer";
 import { useRecentCwds } from "@/hooks/useRecentCwds";
 import { authFetch } from "@/lib/client-auth-fetch";
-import type { SessionTreeNode } from "./session-sidebar/types";
-import { buildSessionTree, formatRelativeTime, shortenCwd } from "./session-sidebar/utils";
+import type { SessionTreeNode, WorkspaceSummary } from "./session-sidebar/types";
+import { buildSessionTree, formatRelativeTime } from "./session-sidebar/utils";
+import { WorkspaceSwitcher } from "./session-sidebar/WorkspaceSwitcher";
 
 interface Props {
   selectedSessionId: string | null;
@@ -116,13 +117,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
-  const { cwds: recentCwds, addCwd, removeCwd, clearCwds } = useRecentCwds();
+  const { cwds: recentCwds, addCwd } = useRecentCwds();
   const [homeDir, setHomeDir] = useState<string>("");
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [customPathOpen, setCustomPathOpen] = useState(false);
   const [customPathValue, setCustomPathValue] = useState("");
-  const customPathInputRef = useRef<HTMLInputElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [explorerKey, setExplorerKey] = useState(0);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
@@ -156,6 +156,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     initialLoadDone.current = true;
     loadSessions(isFirst);
   }, [loadSessions, refreshKey]);
+
+  const loadWorkspaces = useCallback(async () => {
+    const res = await authFetch("/api/workspaces");
+    if (!res.ok) return;
+    const data = await res.json() as { workspaces: WorkspaceSummary[] };
+    setWorkspaces(data.workspaces);
+  }, []);
+
+  useEffect(() => {
+    void loadWorkspaces();
+  }, [loadWorkspaces, refreshKey]);
 
   useEffect(() => {
     if (explorerRefreshKey !== undefined) setExplorerKey((k) => k + 1);
@@ -225,6 +236,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setDropdownOpen(false);
   }, [customPathValue, addCwd]);
 
+  const cancelCustomPath = useCallback(() => {
+    setCustomPathOpen(false);
+    setCustomPathValue("");
+  }, []);
+
   const handleDefaultCwd = useCallback(async () => {
     try {
       const res = await authFetch("/api/default-cwd", { method: "POST" });
@@ -239,18 +255,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
   }, [addCwd]);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-        setCustomPathOpen(false);
-        setCustomPathValue("");
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+  const handleSelectWorkspace = useCallback((cwd: string) => {
+    setSelectedCwd(cwd);
+    setCustomPathOpen(false);
+    setCustomPathValue("");
+    setDropdownOpen(false);
   }, []);
+
+  const handlePinWorkspace = useCallback(async (cwd: string, pinned: boolean) => {
+    setWorkspaces((current) => current.map((workspace) => workspace.cwd === cwd ? { ...workspace, pinned } : workspace));
+    const res = await authFetch(`/api/workspaces/${encodeURIComponent(cwd)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    });
+    if (!res.ok) void loadWorkspaces();
+  }, [loadWorkspaces]);
 
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
@@ -363,281 +383,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </div>
 
         {/* CWD picker */}
-        <div ref={dropdownRef} style={{ position: "relative" }}>
-          <button
-            onClick={() => setDropdownOpen((v) => !v)}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              padding: "6px 10px",
-              background: selectedCwd ? "var(--bg-hover)" : "rgba(37,99,235,0.06)",
-              border: selectedCwd ? "1px solid var(--border)" : "1px solid rgba(37,99,235,0.4)",
-              borderRadius: 7,
-              cursor: "pointer",
-              fontSize: 12,
-              color: "var(--text)",
-              textAlign: "left",
-              transition: "border-color 0.15s, background 0.15s",
-            }}
-          >
-            <span
-              style={{
-                flex: 1,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                color: selectedCwd ? "var(--text)" : "var(--text-dim)",
-              }}
-              title={selectedCwd ?? ""}
-            >
-              {selectedCwd ? shortenCwd(selectedCwd, homeDir) : (initialSessionId && !restoredRef.current ? "" : "Select project…")}
-            </span>
-          </button>
-
-          {dropdownOpen && (
-            <div
-              style={{
-                position: "absolute",
-                top: "calc(100% + 4px)",
-                left: 0,
-                right: 0,
-                zIndex: 100,
-                background: "var(--bg)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                boxShadow: "0 6px 20px rgba(0,0,0,0.10)",
-                overflow: "hidden",
-              }}
-            >
-              {recentCwds.map((cwd) => (
-                <div
-                  key={cwd.path}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    width: "100%",
-                    padding: "8px 10px",
-                    background: cwd.path === selectedCwd ? "var(--bg-selected)" : "none",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setSelectedCwd(cwd.path);
-                      setCustomPathOpen(false);
-                      setCustomPathValue("");
-                      setDropdownOpen(false);
-                    }}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      padding: 0,
-                      background: "none",
-                      border: "none",
-                      color: cwd.path === selectedCwd ? "var(--text)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={cwd.path}
-                  >
-                    {cwd.path === selectedCwd && (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                      </svg>
-                    )}
-                    {cwd.path !== selectedCwd && <span style={{ width: 10, flexShrink: 0 }} />}
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortenCwd(cwd.path, homeDir)}</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const nextCwds = removeCwd(cwd.path);
-                      if (cwd.path === selectedCwd) {
-                        setSelectedCwd(nextCwds.length > 0 ? nextCwds[0].path : null);
-                      }
-                    }}
-                    style={{
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      width: 20, height: 20, padding: 0, flexShrink: 0,
-                      background: "none", border: "none",
-                      color: "var(--text-dim)", cursor: "pointer",
-                      opacity: 0.6,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "#ef4444"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; e.currentTarget.style.color = "var(--text-dim)"; }}
-                    title="Remove from history"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-
-              {/* Default cwd shortcut */}
-              {!customPathOpen && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDefaultCwd(); }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    width: "100%",
-                    padding: "8px 10px",
-                    background: "none",
-                    border: "none",
-                    borderTop: recentCwds.length > 0 ? "1px solid var(--border)" : "none",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 11,
-                  }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M1 3A1 1 0 0 1 2 2H4L5 3.5H8.5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 1 8V3Z" />
-                  </svg>
-                  <span>Use default directory</span>
-                </button>
-              )}
-
-              {/* Clear history button */}
-              {recentCwds.length > 0 && !customPathOpen && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm("确定要清空所有历史目录吗？")) {
-                      clearCwds();
-                      setSelectedCwd(null);
-                    }
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    width: "100%",
-                    padding: "8px 10px",
-                    background: "none",
-                    border: "none",
-                    borderTop: "1px solid var(--border)",
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 11,
-                  }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M2 2h6v1H2z" />
-                    <path d="M3 3v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V3" />
-                  </svg>
-                  <span>Clear history</span>
-                </button>
-              )}
-
-              {/* Custom path entry */}
-              {!customPathOpen ? (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCustomPathOpen(true);
-                    setTimeout(() => customPathInputRef.current?.focus(), 0);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    width: "100%",
-                    padding: "8px 10px",
-                    background: "none",
-                    border: "none",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 11,
-                  }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" style={{ flexShrink: 0 }}>
-                    <line x1="5" y1="1" x2="5" y2="9" />
-                    <line x1="1" y1="5" x2="9" y2="5" />
-                  </svg>
-                  <span>Custom path…</span>
-                </button>
-              ) : (
-                <div style={{ padding: "6px 8px", borderTop: recentCwds.length > 0 ? "none" : undefined }}>
-                  <input
-                    ref={customPathInputRef}
-                    value={customPathValue}
-                    onChange={(e) => setCustomPathValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitCustomPath();
-                      if (e.key === "Escape") {
-                        setCustomPathOpen(false);
-                        setCustomPathValue("");
-                      }
-                    }}
-                    placeholder="/path/to/project"
-                    style={{
-                      width: "100%",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                      padding: "5px 8px",
-                      border: "1px solid var(--accent)",
-                      borderRadius: 5,
-                      outline: "none",
-                      background: "var(--bg)",
-                      color: "var(--text)",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                  <div style={{ display: "flex", gap: 5, marginTop: 5 }}>
-                    <button
-                      onClick={commitCustomPath}
-                      style={{
-                        flex: 1,
-                        padding: "4px 0",
-                        background: "var(--accent)",
-                        border: "none",
-                        borderRadius: 5,
-                        color: "#fff",
-                        fontSize: 11,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Open
-                    </button>
-                    <button
-                      onClick={() => { setCustomPathOpen(false); setCustomPathValue(""); }}
-                      style={{
-                        flex: 1,
-                        padding: "4px 0",
-                        background: "var(--bg-hover)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 5,
-                        color: "var(--text-muted)",
-                        fontSize: 11,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          selectedCwd={selectedCwd}
+          homeDir={homeDir}
+          open={dropdownOpen}
+          customPathOpen={customPathOpen}
+          customPathValue={customPathValue}
+          onToggleOpen={() => setDropdownOpen((value) => !value)}
+          onSelect={handleSelectWorkspace}
+          onPin={handlePinWorkspace}
+          onDefaultCwd={handleDefaultCwd}
+          onCustomPathOpen={() => setCustomPathOpen(true)}
+          onCustomPathValueChange={setCustomPathValue}
+          onCommitCustomPath={commitCustomPath}
+          onCancelCustomPath={cancelCustomPath}
+        />
       </div>
 
       {/* Session list */}
