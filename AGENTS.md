@@ -25,7 +25,8 @@ Verify gate: `npm run verify` (`typecheck`, `lint`, auth/release/UI tests)
 
 - Keep `/home/hsops/pi-web-auth` on `main` as the production worktree; do not develop in it while `pi-web-auth.service` serves port 8000.
 - Create each feature on a separate branch and linked worktree. Use a dedicated `HOME` so `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent` resolve inside the isolated environment.
-- Run development and acceptance on a non-8000 port, for example `HOME=/home/hsops/.pi-feature-dev-home npm run dev -- -p 8144`.
+- Run development and acceptance on a non-8000 port through a user systemd service, not a transient shell/PTY. For the current feature lane use `pi-web-auth-8144-dev.service`, with `WorkingDirectory` pointing at the feature worktree and `HOME=/home/hsops/.pi-session-workspace-dev-home`; inspect it with `systemctl --user status pi-web-auth-8144-dev.service` and `journalctl --user -u pi-web-auth-8144-dev.service --no-pager`.
+- For future feature lanes, create the same style of user service for the chosen port and isolated HOME before manual acceptance. Avoid long-running `npm run dev -- -p <port>` sessions that die when the terminal or agent PTY closes.
 - Do not run `next build` in a development worktree. Use the dev server for implementation and acceptance.
 - Release sequence: tests pass -> non-8000 user acceptance -> merge into clean `main` -> build/stage standalone release -> online pre-backup -> explicit production approval -> release script -> verify port 8000 and preserved data counts.
 
