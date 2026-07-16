@@ -331,13 +331,12 @@ export function listAdminAuditEvents(db: Database.Database, query: AuditListQuer
     offset: (query.page - 1) * query.pageSize,
   };
   if (query.visibleTargetUsernames !== null) {
-    if (query.visibleTargetUsernames.length === 0) where.push("target_username IS NULL AND actor_username=@actorOnly");
+    if (query.visibleTargetUsernames.length === 0) where.push("target_username IS NULL");
     else {
       const names = query.visibleTargetUsernames.map((_, index) => `@visible${index}`);
       query.visibleTargetUsernames.forEach((name, index) => { params[`visible${index}`] = name; });
-      where.push(`(target_username IS NULL OR target_username IN (${names.join(", ")}) OR actor_username=@actorOnly)`);
+      where.push(`(target_username IS NULL OR target_username IN (${names.join(", ")}))`);
     }
-    params.actorOnly = query.actor ?? "";
   }
   if (query.actor) { where.push("actor_username=@actor"); params.actor = query.actor; }
   if (query.target) { where.push("target_username=@target"); params.target = query.target; }
@@ -625,7 +624,7 @@ Remove the old duplicated loop from `syncSessionIndex()`.
 
 ```bash
 node --experimental-strip-types --test __tests__/lib/session-index/service-stats.test.ts
-node --experimental-strip-types --test __tests__/lib/session-index/service-runtime.test.ts
+node --experimental-strip-types --test "__tests__/lib/session-index/*.test.ts"
 ```
 
 Expected: both pass.
@@ -682,9 +681,14 @@ beforeEach(() => {
   insertSession.run("d1", "/tmp/d1", "/p/d", "disabled_user", "Disabled", "first disabled", "2026-07-16T00:00:00.000Z", "2026-07-16T00:20:00.000Z", 1, 0, 0, null);
   insertSession.run("h1", "/tmp/h1", "/p/h", "hsops", "Secret", "super", "2026-07-16T00:00:00.000Z", "2026-07-16T00:30:00.000Z", 1, 0, 0, null);
   insertSession.run("u1", "/tmp/u1", "/p/u", null, "Unowned", "bad", "2026-07-16T00:00:00.000Z", "2026-07-16T00:40:00.000Z", 0, 0, 1, "bad header");
+  insertSession.run("m1", "/tmp/m1", "/p/a", "alice", "Missing", "missing", "2026-07-16T00:00:00.000Z", "2026-07-16T00:50:00.000Z", 0, 1, 0, null);
+  insertSession.run("o1", "/tmp/o1", "/p/a", "alice", "Orphan", "orphan", "2026-07-16T00:00:00.000Z", "2026-07-16T00:55:00.000Z", 0, 0, 1, null);
+  insertSession.run("x1", "/tmp/x1", "/p/a", "alice", "Index Error", "error", "2026-07-16T00:00:00.000Z", "2026-07-16T00:56:00.000Z", 0, 0, 0, "parse failed");
   db.prepare(`INSERT INTO workspaces (cwd, owner_username, session_count, last_active_at, indexed_at) VALUES (?, ?, ?, ?, ?)`).run("/p/a", "alice", 1, "2026-07-16T00:10:00.000Z", "2026-07-16T00:11:00.000Z");
   db.prepare(`INSERT INTO workspaces (cwd, owner_username, session_count, last_active_at, indexed_at) VALUES (?, ?, ?, ?, ?)`).run("/p/d", "disabled_user", 1, "2026-07-16T00:20:00.000Z", "2026-07-16T00:21:00.000Z");
   db.prepare(`INSERT INTO workspaces (cwd, owner_username, session_count, last_active_at, indexed_at) VALUES (?, ?, ?, ?, ?)`).run("/p/h", "hsops", 1, "2026-07-16T00:30:00.000Z", "2026-07-16T00:31:00.000Z");
+  db.prepare("INSERT INTO session_messages (session_id, entry_id, role, text, sequence) VALUES (?, ?, ?, ?, ?)").run("a1", "e1", "user", "needle public", 0);
+  db.prepare("INSERT INTO session_messages (session_id, entry_id, role, text, sequence) VALUES (?, ?, ?, ?, ?)").run("h1", "e2", "user", "needle secret", 0);
 });
 
 test("admin sessions include disabled ordinary users and exclude super admin and unowned", () => {
@@ -694,9 +698,28 @@ test("admin sessions include disabled ordinary users and exclude super admin and
 });
 
 test("super admin index health can include unowned issues", () => {
-  const result = store.getAdminIndexHealth(superVisibility, { page: 1, pageSize: 20 });
+  const result = store.getAdminIndexHealth(superVisibility, { page: 1, pageSize: 20, staleCandidateCount: 3 });
+  assert.equal(result.databaseAvailable, true);
+  assert.equal(result.totalSessions, 7);
+  assert.equal(result.totalWorkspaces, 3);
+  assert.equal(result.issueCounts.missing, 1);
+  assert.equal(result.issueCounts.orphaned, 2);
+  assert.equal(result.issueCounts.indexError, 2);
+  assert.equal(result.staleCandidateCount, 3);
   assert.equal(result.issueCounts.unowned, 1);
   assert.equal(result.issues.some((issue) => issue.ownerUsername === null), true);
+});
+
+test("admin FTS search is permission filtered", () => {
+  const result = store.searchAdminSessions(adminVisibility, { q: "needle", page: 1, pageSize: 20 });
+  assert.equal(result.total, 1);
+  assert.equal(result.results[0].sessionId, "a1");
+});
+
+test("user observability issues include missing orphaned and index errors", () => {
+  const result = store.getAdminUserObservability(adminVisibility, "alice");
+  assert.ok(result);
+  assert.deepEqual(result.issues.map((session) => session.id).sort(), ["m1", "o1", "x1"]);
 });
 
 test("user summary derives lastActiveAt from max modified_at with null last", () => {
@@ -722,7 +745,7 @@ Create `lib/session-index/admin-store.ts` with these exported types and helpers:
 import type Database from "better-sqlite3";
 import type { AdminVisibility } from "../auth/admin-visibility";
 
-export type AdminSessionStatus = "normal" | "missing" | "orphaned" | "index_error";
+export type AdminSessionStatus = "normal" | "missing" | "orphaned" | "index_error" | "any_issue";
 export type AdminSessionSort = "modified_desc" | "modified_asc" | "created_desc" | "title_asc";
 export type AdminWorkspaceSort = "last_active_desc" | "session_count_desc" | "cwd_asc";
 
@@ -797,6 +820,7 @@ export function createAdminSessionIndexStore(db: Database.Database) {
     if (filters.status === "missing") where.push("s.missing=1");
     if (filters.status === "orphaned") where.push("s.orphaned=1");
     if (filters.status === "index_error") where.push("s.index_error IS NOT NULL");
+    if (filters.status === "any_issue") where.push("(s.missing=1 OR s.orphaned=1 OR s.index_error IS NOT NULL)");
     if (filters.from) { where.push("s.modified_at>=@from"); params.from = filters.from; }
     if (filters.to) { where.push("s.modified_at<=@to"); params.to = filters.to; }
     const orderBy = filters.sort === "modified_asc" ? "s.modified_at ASC" : filters.sort === "created_desc" ? "s.created_at DESC" : filters.sort === "title_asc" ? "COALESCE(s.title, s.first_message, s.id) ASC" : "s.modified_at DESC";
@@ -804,6 +828,35 @@ export function createAdminSessionIndexStore(db: Database.Database) {
     const total = (db.prepare(`SELECT COUNT(*) AS count FROM sessions s WHERE ${whereSql}`).get(params) as { count: number }).count;
     const rows = db.prepare(`SELECT s.* FROM sessions s WHERE ${whereSql} ORDER BY ${orderBy} LIMIT @limit OFFSET @offset`).all(params) as Array<Record<string, unknown>>;
     return { sessions: rows.map(mapSession), total, page: filters.page, pageSize: filters.pageSize };
+  }
+
+  function searchAdminSessions(visibility: AdminVisibility, filters: { q: string; username?: string; cwd?: string; page: number; pageSize: number }) {
+    const owner = ownerFilter(visibility, "s");
+    const where = ["session_messages_fts MATCH @q", owner.sql];
+    const params: Record<string, unknown> = { ...owner.params, q: filters.q, limit: filters.pageSize, offset: (filters.page - 1) * filters.pageSize };
+    if (filters.username) { where.push("s.owner_username=@username"); params.username = filters.username; }
+    if (filters.cwd) { where.push("s.cwd LIKE @cwd"); params.cwd = `${filters.cwd}%`; }
+    const whereSql = where.join(" AND ");
+    const total = (db.prepare(`
+      SELECT COUNT(DISTINCT s.id) AS count
+      FROM session_messages_fts
+      JOIN session_messages sm ON sm.id=session_messages_fts.rowid
+      JOIN sessions s ON s.id=sm.session_id
+      WHERE ${whereSql}
+    `).get(params) as { count: number }).count;
+    const rows = db.prepare(`
+      SELECT s.id AS sessionId, sm.entry_id AS entryId, s.owner_username AS ownerUsername, s.cwd,
+             COALESCE(s.title, s.first_message, s.id) AS title,
+             snippet(session_messages_fts, 0, '<mark>', '</mark>', '...', 12) AS snippet,
+             sm.role, s.modified_at AS modifiedAt
+      FROM session_messages_fts
+      JOIN session_messages sm ON sm.id=session_messages_fts.rowid
+      JOIN sessions s ON s.id=sm.session_id
+      WHERE ${whereSql}
+      ORDER BY rank
+      LIMIT @limit OFFSET @offset
+    `).all(params) as Array<Record<string, unknown>>;
+    return { results: rows, total, page: filters.page, pageSize: filters.pageSize };
   }
 
   function listAdminWorkspaces(visibility: AdminVisibility, filters: { username?: string; q?: string; activeFrom?: string; page: number; pageSize: number; sort: AdminWorkspaceSort }) {
@@ -820,13 +873,36 @@ export function createAdminSessionIndexStore(db: Database.Database) {
     return { workspaces: rows, total, page: filters.page, pageSize: filters.pageSize };
   }
 
-  function getAdminIndexHealth(visibility: AdminVisibility, filters: { page: number; pageSize: number }) {
+  function getAdminIndexHealth(visibility: AdminVisibility, filters: { page: number; pageSize: number; staleCandidateCount?: number }) {
     const owner = ownerFilter(visibility, "s");
+    const visibleWhere = `(${owner.sql}${visibility.includeUnownedIndexIssues ? " OR s.owner_username IS NULL" : ""})`;
     const issueWhere = [`(${owner.sql}${visibility.includeUnownedIndexIssues ? " OR s.owner_username IS NULL" : ""})`, "(s.missing=1 OR s.orphaned=1 OR s.index_error IS NOT NULL)"];
     const params = { ...owner.params, limit: filters.pageSize, offset: (filters.page - 1) * filters.pageSize };
     const issues = db.prepare(`SELECT s.* FROM sessions s WHERE ${issueWhere.join(" AND ")} ORDER BY s.modified_at DESC LIMIT @limit OFFSET @offset`).all(params) as Array<Record<string, unknown>>;
+    const totals = db.prepare(`
+      SELECT COUNT(*) AS totalSessions,
+             SUM(CASE WHEN missing=1 THEN 1 ELSE 0 END) AS missing,
+             SUM(CASE WHEN orphaned=1 THEN 1 ELSE 0 END) AS orphaned,
+             SUM(CASE WHEN index_error IS NOT NULL THEN 1 ELSE 0 END) AS indexError,
+             MIN(indexed_at) AS oldestIndexedAt,
+             MAX(indexed_at) AS newestIndexedAt
+      FROM sessions s WHERE ${visibleWhere}
+    `).get(owner.params) as Record<string, unknown>;
+    const workspaceOwner = ownerFilter(visibility, "w");
+    const totalWorkspaces = (db.prepare(`SELECT COUNT(*) AS count FROM workspaces w WHERE ${workspaceOwner.sql}`).get(workspaceOwner.params) as { count: number }).count;
     const unowned = visibility.includeUnownedIndexIssues ? (db.prepare("SELECT COUNT(*) AS count FROM sessions WHERE owner_username IS NULL AND (missing=1 OR orphaned=1 OR index_error IS NOT NULL)").get() as { count: number }).count : 0;
-    return { issues: issues.map(mapSession), issueCounts: { unowned }, page: filters.page, pageSize: filters.pageSize };
+    return {
+      databaseAvailable: true,
+      totalSessions: Number(totals.totalSessions ?? 0),
+      totalWorkspaces,
+      oldestIndexedAt: totals.oldestIndexedAt === null ? null : String(totals.oldestIndexedAt),
+      newestIndexedAt: totals.newestIndexedAt === null ? null : String(totals.newestIndexedAt),
+      staleCandidateCount: filters.staleCandidateCount ?? 0,
+      issueCounts: { missing: Number(totals.missing ?? 0), orphaned: Number(totals.orphaned ?? 0), indexError: Number(totals.indexError ?? 0), unowned },
+      issues: issues.map(mapSession),
+      page: filters.page,
+      pageSize: filters.pageSize,
+    };
   }
 
   function getAdminOverview(visibility: AdminVisibility) {
@@ -864,11 +940,11 @@ export function createAdminSessionIndexStore(db: Database.Database) {
       summary,
       recentSessions: listAdminSessions(visibility, { username: targetUsername, page: 1, pageSize: 20, sort: "modified_desc" }).sessions,
       recentWorkspaces: listAdminWorkspaces(visibility, { username: targetUsername, page: 1, pageSize: 20, sort: "last_active_desc" }).workspaces,
-      issues: listAdminSessions(visibility, { username: targetUsername, status: "index_error", page: 1, pageSize: 20, sort: "modified_desc" }).sessions,
+      issues: listAdminSessions(visibility, { username: targetUsername, status: "any_issue", page: 1, pageSize: 20, sort: "modified_desc" }).sessions,
     };
   }
 
-  return { getOwnerSummaries, listAdminSessions, listAdminWorkspaces, getAdminIndexHealth, getAdminOverview, getAdminUserObservability };
+  return { getOwnerSummaries, listAdminSessions, searchAdminSessions, listAdminWorkspaces, getAdminIndexHealth, getAdminOverview, getAdminUserObservability };
 }
 ```
 
@@ -905,7 +981,7 @@ Create `__tests__/app/api/admin-observability.test.ts` with concrete contract te
 ```ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAdminOverviewResponse, mergeUserObservabilitySummaries } from "../../../lib/auth/admin-observability-responses.ts";
+import { buildAdminOverviewResponse, mergeUserObservabilitySummaries, sortAdminUsers } from "../../../lib/auth/admin-observability-responses.ts";
 
 test("buildAdminOverviewResponse keeps ordinary admin user counts scoped to visible users", () => {
   const response = buildAdminOverviewResponse({
@@ -932,6 +1008,14 @@ test("mergeUserObservabilitySummaries preserves legacy user fields", () => {
   assert.equal(merged[0].username, "alice");
   assert.equal(merged[0].created_at, "2026-07-16T00:00:00.000Z");
   assert.equal(merged[0].sessionCount, 2);
+});
+
+test("sortAdminUsers keeps null lastActiveAt last", () => {
+  const users = [
+    { username: "empty", role: "user", disabled: 0, created_at: "2026-07-16T00:00:00.000Z", sessionCount: 0, workspaceCount: 0, missingCount: 0, orphanedCount: 0, indexErrorCount: 0, lastActiveAt: null },
+    { username: "active", role: "user", disabled: 0, created_at: "2026-07-16T00:00:00.000Z", sessionCount: 3, workspaceCount: 1, missingCount: 0, orphanedCount: 0, indexErrorCount: 0, lastActiveAt: "2026-07-16T01:00:00.000Z" },
+  ];
+  assert.deepEqual(sortAdminUsers(users, "last_active_desc").map((user) => user.username), ["active", "empty"]);
 });
 ```
 
@@ -980,6 +1064,30 @@ export function mergeUserObservabilitySummaries(users: AdminUserRow[], summaries
   }));
 }
 
+export type AdminUserSort = "created_asc" | "created_desc" | "last_active_desc" | "last_active_asc" | "username_asc" | "session_count_desc";
+
+type AdminUserWithSummary = AdminUserRow & UserSummary;
+
+export function parseAdminUserSort(value: string | null): AdminUserSort {
+  if (value === "created_desc" || value === "last_active_desc" || value === "last_active_asc" || value === "username_asc" || value === "session_count_desc") return value;
+  return "created_asc";
+}
+
+export function sortAdminUsers(users: AdminUserWithSummary[], sort: AdminUserSort): AdminUserWithSummary[] {
+  return [...users].sort((a, b) => {
+    if (sort === "created_desc") return b.created_at.localeCompare(a.created_at);
+    if (sort === "username_asc") return a.username.localeCompare(b.username);
+    if (sort === "session_count_desc") return b.sessionCount - a.sessionCount || a.username.localeCompare(b.username);
+    if (sort === "last_active_desc" || sort === "last_active_asc") {
+      if (a.lastActiveAt === null && b.lastActiveAt === null) return a.username.localeCompare(b.username);
+      if (a.lastActiveAt === null) return 1;
+      if (b.lastActiveAt === null) return -1;
+      return sort === "last_active_desc" ? b.lastActiveAt.localeCompare(a.lastActiveAt) : a.lastActiveAt.localeCompare(b.lastActiveAt);
+    }
+    return a.created_at.localeCompare(b.created_at);
+  });
+}
+
 export function buildAdminOverviewResponse(input: {
   actorRole: "admin" | "super_admin";
   authUsers: AdminUserRow[];
@@ -1018,15 +1126,16 @@ import { createAdminVisibility } from "@/lib/auth/admin-visibility";
 import { getSessionIndexDb } from "@/lib/session-index/db";
 import { getSessionIndexDbPath } from "@/lib/auth/data-dir";
 import { createAdminSessionIndexStore } from "@/lib/session-index/admin-store";
-import { mergeUserObservabilitySummaries } from "@/lib/auth/admin-observability-responses";
+import { mergeUserObservabilitySummaries, parseAdminUserSort, sortAdminUsers } from "@/lib/auth/admin-observability-responses";
 
 // after users query:
+const url = new URL(req.url);
 const visibility = createAdminVisibility(getDb(), guard);
 const summaries = createAdminSessionIndexStore(getSessionIndexDb(getSessionIndexDbPath())).getOwnerSummaries(
   visibility,
   users.map((user) => user.username),
 );
-return NextResponse.json({ users: mergeUserObservabilitySummaries(users, summaries) });
+return NextResponse.json({ users: sortAdminUsers(mergeUserObservabilitySummaries(users, summaries), parseAdminUserSort(url.searchParams.get("sort"))) });
 ```
 
 Keep existing fields `username`, `role`, `disabled`, `created_at` unchanged.
@@ -1144,17 +1253,33 @@ import { getSessionIndexDbPath } from "@/lib/auth/data-dir";
 import { getSessionIndexDb } from "@/lib/session-index/db";
 import { createAdminSessionIndexStore, type AdminSessionSort, type AdminSessionStatus } from "@/lib/session-index/admin-store";
 
+function statusParam(value: string | null): AdminSessionStatus | undefined {
+  if (value === "normal" || value === "missing" || value === "orphaned" || value === "index_error" || value === "any_issue") return value;
+  return undefined;
+}
+
 export async function GET(req: Request) {
   const guard = requireAdmin(req);
   if (guard instanceof NextResponse) return guard;
   const url = new URL(req.url);
   const visibility = createAdminVisibility(getDb(), guard);
   const store = createAdminSessionIndexStore(getSessionIndexDb(getSessionIndexDbPath()));
+  if (url.searchParams.get("mode") === "fts") {
+    const q = url.searchParams.get("q");
+    if (!q) return NextResponse.json({ error: "q is required for fts search" }, { status: 400 });
+    return NextResponse.json(store.searchAdminSessions(visibility, {
+      q,
+      username: url.searchParams.get("username") ?? undefined,
+      cwd: url.searchParams.get("cwd") ?? undefined,
+      page: intParam(url.searchParams.get("page"), 1, 1, 10_000),
+      pageSize: intParam(url.searchParams.get("pageSize"), 50, 1, 200),
+    }));
+  }
   const result = store.listAdminSessions(visibility, {
     username: url.searchParams.get("username") ?? undefined,
     cwd: url.searchParams.get("cwd") ?? undefined,
     q: url.searchParams.get("q") ?? undefined,
-    status: enumParam<AdminSessionStatus>(url.searchParams.get("status"), ["normal", "missing", "orphaned", "index_error"], undefined),
+    status: statusParam(url.searchParams.get("status")),
     from: url.searchParams.get("from") ?? undefined,
     to: url.searchParams.get("to") ?? undefined,
     sort: enumParam<AdminSessionSort>(url.searchParams.get("sort"), ["modified_desc", "modified_asc", "created_desc", "title_asc"], "modified_desc"),
@@ -1164,8 +1289,6 @@ export async function GET(req: Request) {
   return NextResponse.json(result);
 }
 ```
-
-If `enumParam` does not accept `undefined` fallback, add a local status parser.
 
 - [ ] **Step 3: Implement `/api/admin/workspaces`**
 
@@ -1184,6 +1307,15 @@ import { createAdminVisibility } from "@/lib/auth/admin-visibility";
 import { getSessionIndexDbPath } from "@/lib/auth/data-dir";
 import { createSessionIndexDb, migrateSessionIndexDb } from "@/lib/session-index/db";
 import { createAdminSessionIndexStore } from "@/lib/session-index/admin-store";
+import { scanSessionFiles } from "@/lib/session-index/scanner";
+import { getSessionsDir } from "@/lib/session-reader";
+
+function computeStaleCandidateCount(db: import("better-sqlite3").Database): number {
+  const files = scanSessionFiles(getSessionsDir());
+  const rows = db.prepare("SELECT path, source_mtime_ms FROM sessions WHERE missing=0").all() as Array<{ path: string; source_mtime_ms: number }>;
+  const indexed = new Map(rows.map((row) => [row.path, row.source_mtime_ms]));
+  return files.filter((file) => indexed.get(file.path) !== file.mtimeMs).length;
+}
 
 export async function GET(req: Request) {
   const guard = requireAdmin(req);
@@ -1195,6 +1327,7 @@ export async function GET(req: Request) {
     const result = createAdminSessionIndexStore(db).getAdminIndexHealth(createAdminVisibility(getDb(), guard), {
       page: intParam(url.searchParams.get("page"), 1, 1, 10_000),
       pageSize: intParam(url.searchParams.get("pageSize"), 50, 1, 200),
+      staleCandidateCount: computeStaleCandidateCount(db),
     });
     return NextResponse.json(result);
   } finally {
