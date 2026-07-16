@@ -83,6 +83,14 @@ export function recordAdminAuditEvent(db: Database.Database, event: AdminAuditIn
   );
 }
 
+export function safeRecordAdminAuditEvent(db: Database.Database, event: AdminAuditInput): void {
+  try {
+    recordAdminAuditEvent(db, event);
+  } catch (error) {
+    console.warn("admin audit write failed", error);
+  }
+}
+
 function mapAuditEvent(row: Record<string, unknown>): AdminAuditEvent {
   return {
     id: Number(row.id),
