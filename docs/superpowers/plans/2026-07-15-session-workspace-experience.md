@@ -13,6 +13,7 @@
 ## Source Spec
 
 - Spec: `docs/superpowers/specs/2026-07-15-session-workspace-experience-design.md`
+- Temporary integration flow: `docs/superpowers/session-workspace-integration-flow.md` is required reading before P2/P3 work, child-branch merges, and the final merge back to `main`.
 - Required execution mode: Subagent-Driven development, fresh subagent per task.
 - Development worktree: create at execution time with `superpowers:using-git-worktrees`.
 - Production worktree `/home/hsops/pi-web-auth` must remain clean `main` during implementation.

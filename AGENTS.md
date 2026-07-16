@@ -25,6 +25,7 @@ Verify gate: `npm run verify` (`typecheck`, `lint`, auth/release/UI tests)
 
 - Keep `/home/hsops/pi-web-auth` on `main` as the production worktree; do not develop in it while `pi-web-auth.service` serves port 8000.
 - Create each feature on a separate branch and linked worktree. Use a dedicated `HOME` so `~/.pi-web-auth`, `~/pi-users`, and `~/.pi/agent` resolve inside the isolated environment.
+- During the P1/P2/P3 session-workspace product line, treat `feat/session-workspace-experience` as the temporary integration branch. Before P2, P3, any child-branch merge, or the final merge back to `main`, read and follow `docs/superpowers/session-workspace-integration-flow.md`.
 - Run development and acceptance on a non-8000 port through a user systemd service, not a transient shell/PTY. For the current feature lane use `pi-web-auth-8144-dev.service`, with `WorkingDirectory` pointing at the feature worktree and `HOME=/home/hsops/.pi-session-workspace-dev-home`; inspect it with `systemctl --user status pi-web-auth-8144-dev.service` and `journalctl --user -u pi-web-auth-8144-dev.service --no-pager`.
 - For future feature lanes, create the same style of user service for the chosen port and isolated HOME before manual acceptance. Avoid long-running `npm run dev -- -p <port>` sessions that die when the terminal or agent PTY closes.
 - Do not run `next build` in a development worktree. Use the dev server for implementation and acceptance.
