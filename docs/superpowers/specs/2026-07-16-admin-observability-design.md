@@ -134,10 +134,16 @@ super_admin
 1. 从 `auth.db` 读取当前 actor、目标用户角色，以及 actor 可观察的 owner 用户名集合。
 2. 将该集合作为参数传入 admin session-index 查询层。
 3. session-index SQL 使用 `owner_username IN (...)` 或 `owner_username=@targetUsername` 下推过滤和分页。
-4. 若 actor 是普通 `admin`，可见 owner 集合只包含 `role='user'` 的用户；不包含 `admin`、`super_admin` 和 `NULL` owner。
+4. 若 actor 是普通 `admin`，可见 owner 集合只包含 `role='user'` 的用户；不包含 `admin`、`super_admin` 和 `NULL` owner。该集合必须包含 disabled 普通用户，不能使用现有 `listUsernames()`，因为它只返回 `disabled=0` 用户。
 5. 若 actor 是 `super_admin`，默认可见所有非 NULL owner；索引健康页额外可以查看 `owner_username IS NULL` 的无主异常项。
 
-`owner_username IS NULL` 表示索引期无法把 cwd 归属到任何用户根。此类会话不能出现在普通 admin 的 overview、sessions、workspaces 和用户详情中；只能在 super_admin 的 `/admin/index` 异常列表中显示为 `unowned`，用于排查索引或历史数据问题。
+`owner_username IS NULL` 表示索引期无法把 cwd 归属到任何用户根，或 cwd 同时命中多个用户根导致归属歧义。此类会话不能出现在普通 admin 的 overview、sessions、workspaces 和用户详情中；只能在 super_admin 的 `/admin/index` 异常列表中显示为 `unowned`，用于排查索引或历史数据问题。
+
+P2 必须新增 auth 侧可见 owner 查询，例如 `listAdminVisibleOwners(actorRole)`：
+
+- 普通 `admin` 返回所有 `role='user'` 的用户名，包含 `disabled=0` 与 `disabled=1`。
+- `super_admin` 返回所有已存在用户，包含 disabled 用户。
+- 该方法不能复用 `listUsernames()`，否则 disabled 用户的历史会话和工作区会在 admin 观测中被错误隐藏。
 
 ## 7. 数据来源与存储边界
 
@@ -211,6 +217,14 @@ P2 必须记录这些事件：
 
 P2 不记录每一次文件读取、会话详情读取或普通列表刷新，否则 audit 会被噪音淹没。
 
+审计接入不是只新增 audit 列表 API。P2 必须改造现有用户管理端点的成功与失败分支，包括：
+
+- `POST /api/admin/users/[username]/disable`
+- `PATCH /api/admin/users/[username]`
+- `DELETE /api/admin/users/[username]`
+
+这些端点的权限拒绝、目标不存在、参数错误、业务失败和成功返回都应统一写入 audit。实现时应提供小型 helper，避免每个 route 手写不一致的 try/catch 和 failure 记录。
+
 `user.view_observability` 不是每次 GET 都记录。为避免刷新页面产生审计噪音，只在以下情况记录：
 
 - actor 首次在一个 30 分钟窗口内查看某个 target 用户观测详情时记录一次 success。
@@ -253,6 +267,8 @@ interface AdminVisibility {
 
 普通 admin 的 `visibleOwnerUsernames` 只包含普通 user。super_admin 包含所有已知用户。所有列表页默认排除 `owner_username IS NULL`；只有 `includeUnownedIndexIssues=true` 的 index health 异常列表可额外返回无主项。
 
+用户级 `lastActiveAt` 不是 `sessions` 表的物理列，必须从 session-index 聚合派生：`MAX(s.modified_at) GROUP BY s.owner_username`。工作区级 `lastActiveAt` 读取 `workspaces.last_active_at`。用户没有任何可见会话时 `lastActiveAt=NULL`，UI 显示为 `Never` 或 `-`；排序时 NULL 始终排在最后，不随升序/降序进入顶部。
+
 Admin 查询层需要专门测试 SQL total、分页、可见 owner 过滤、super_admin 排除、NULL owner 排除/展示规则，不能只测 route handler。
 
 ## 10. 后端 API
@@ -280,12 +296,21 @@ GET /api/admin/overview
 GET /api/admin/users?q=&role=&disabled=&sort=&page=&pageSize=
 ```
 
-增强现有用户列表，返回每个用户的观测摘要：
+增强现有用户列表，返回每个用户的观测摘要。P2 采用向后兼容扩展现有 `GET /api/admin/users` 的方式：保留现有 `users: [{ username, role, disabled, created_at }]` 字段，新增字段只作为每个 user 对象上的可选观测字段；现有 P1 admin 页面读取旧字段不应被破坏。
 
 - username、role、disabled、created_at。
-- lastActiveAt。
+- lastActiveAt：从该用户拥有会话的 `MAX(s.modified_at)` 派生，没有会话时为 `null`。
 - sessionCount、workspaceCount。
 - missingCount、orphanedCount、indexErrorCount。
+
+支持 sort：
+
+- `created_asc`：默认，兼容现有创建时间排序。
+- `created_desc`。
+- `last_active_desc`：`lastActiveAt` 新到旧，NULL 最后。
+- `last_active_asc`：`lastActiveAt` 旧到新，NULL 最后。
+- `username_asc`。
+- `session_count_desc`。
 
 普通 admin 的列表不得暴露 super_admin 的可观测详情入口。
 
@@ -472,7 +497,7 @@ P2 管理界面应是安静、密集、可扫描的操作型后台，不做营�
 
 - 审计 store 单测：写入、分页、actor/target/action/status/time 过滤、metadata JSON。
 - 管理权限单测：普通 user 不能访问 admin API；admin 不能查看 super_admin；super_admin 可查看全部。
-- Admin session-index 查询层单测：跨 owner 聚合、visibleOwnerUsernames 过滤、NULL owner 默认排除、super_admin index health 可见无主异常。
+- Admin session-index 查询层单测：跨 owner 聚合、visibleOwnerUsernames 过滤、disabled 普通用户仍可见、NULL owner 默认排除、super_admin index health 可见无主异常。
 - Overview 查询测试：用户统计、会话统计、工作区统计、异常统计准确。
 - 用户观测测试：按目标用户返回 session/workspace/issue 统计；不存在用户 404；越权 403。
 - 跨用户 sessions/workspaces 查询测试：分页 total 准确，普通 admin 不返回 super_admin 数据。
