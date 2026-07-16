@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { SUPER_ADMIN } from "./roles";
 import { getAuthDbPath, getPiWebAuthDataDir } from "./data-dir";
+import { migrateAdminAudit } from "./admin-audit";
 
 declare global {
   var __piAuthDb: Database.Database | undefined;
@@ -40,6 +41,7 @@ export function getDb(): Database.Database {
   if (!hasColumn("disabled")) {
     db.exec("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
   }
+  migrateAdminAudit(db);
   db.prepare("UPDATE users SET role='super_admin' WHERE username=?").run(SUPER_ADMIN);
   globalThis.__piAuthDb = db;
   return db;
