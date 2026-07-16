@@ -51,7 +51,6 @@ export default function LoginPage() {
     else submitRegister();
   }
 
-  const showForm = mode === "login" || gatePassed;
   const isError = msg !== null && msg !== "注册成功，请登录";
 
   return (
