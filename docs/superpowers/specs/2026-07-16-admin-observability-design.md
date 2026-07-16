@@ -43,7 +43,7 @@ P2 的目标是把 `/admin` 从“用户管理页”升级为“管理员产品�
 - 提供跨用户工作区浏览页，支持按用户、活跃时间、会话数和路径搜索。
 - 提供索引健康/异常视图，展示 `session-index.db` 的可用性、统计、异常和最近索引状态。
 - 提供基础审计记录，记录关键管理员行为。
-- 复用 P1 的 `session-index.db` 作为观测查询来源，避免重新扫描文件作为常态查询路径。
+- 新增 admin 查询层读取 P1 的 `session-index.db`；不能把 P1 单用户 store 方法误用为跨用户查询能力。
 - 后端 API 必须执行管理员权限和目标用户权限校验，不依赖前端隐藏。
 - 保持普通用户主工作台行为不变。
 
@@ -62,9 +62,10 @@ P2 的目标是把 `/admin` 从“用户管理页”升级为“管理员产品�
 - P2 使用路由拆分型方案，不采用单页 tab 扩展型方案。
 - `/admin` 作为 admin shell 入口，默认导向 `/admin/overview`。
 - 审计事件写入 `auth.db`，因为它属于安全/权限事实数据，必须随 auth 数据备份保留。
-- 会话、工作区、异常、搜索统计主要读取 P1 的 `session-index.db`。
+- 会话、工作区、异常、搜索统计主要读取 P1 的 `session-index.db`，但 P2 必须新增 admin 专用查询方法；P1 `listSessions`、`searchSessions`、`listWorkspaces` 都是单用户视角，不能覆盖 P2。
 - 普通 `admin` 不能观察 `super_admin` 的私有文件、会话和用户详情；`super_admin` 可以观察全部。
 - `POST /api/admin/index/rescan` 仅 `super_admin` 可执行；普通 `admin` 只能读取索引健康。
+- 普通 `admin` 的跨用户 SQL 过滤使用 auth 层预先计算的可见 owner 集合，不使用跨库 JOIN；`owner_username IS NULL` 的无主会话只允许 `super_admin` 在索引健康页查看。
 
 ## 5. 信息架构与 URL
 
@@ -84,13 +85,13 @@ P2 管理后台使用独立路由，URL 可刷新、收藏和分享给有权限�
 预期访问示例：
 
 ```text
-http://10.16.49.16:8144/admin/overview
-http://10.16.49.16:8144/admin/users
-http://10.16.49.16:8144/admin/users/hsops
-http://10.16.49.16:8144/admin/sessions
-http://10.16.49.16:8144/admin/workspaces
-http://10.16.49.16:8144/admin/index
-http://10.16.49.16:8144/admin/audit
+http://10.16.49.16:8145/admin/overview
+http://10.16.49.16:8145/admin/users
+http://10.16.49.16:8145/admin/users/hsops
+http://10.16.49.16:8145/admin/sessions
+http://10.16.49.16:8145/admin/workspaces
+http://10.16.49.16:8145/admin/index
+http://10.16.49.16:8145/admin/audit
 ```
 
 页面结构：
@@ -125,6 +126,18 @@ super_admin
 - `super_admin`：可以访问全部 admin 观测页面，可以触发索引 rescan，可以管理 `user` 与 `admin`，但不能破坏性操作自己或 super_admin 角色。
 
 后端 API 必须集中使用 `requireAdmin`、`requireSuperAdmin`、`guardAdminViewTarget`、`canManage`、`canChangeRole` 等现有能力，前端隐藏按钮只作为体验优化。
+
+### 跨库权限过滤机制
+
+`auth.db` 和 `session-index.db` 是两个独立 SQLite 文件。P2 不采用 `ATTACH` 做跨库 JOIN，避免把 auth/schema 生命周期耦合到 session index 连接上。所有 admin 查询按以下顺序执行：
+
+1. 从 `auth.db` 读取当前 actor、目标用户角色，以及 actor 可观察的 owner 用户名集合。
+2. 将该集合作为参数传入 admin session-index 查询层。
+3. session-index SQL 使用 `owner_username IN (...)` 或 `owner_username=@targetUsername` 下推过滤和分页。
+4. 若 actor 是普通 `admin`，可见 owner 集合只包含 `role='user'` 的用户；不包含 `admin`、`super_admin` 和 `NULL` owner。
+5. 若 actor 是 `super_admin`，默认可见所有非 NULL owner；索引健康页额外可以查看 `owner_username IS NULL` 的无主异常项。
+
+`owner_username IS NULL` 表示索引期无法把 cwd 归属到任何用户根。此类会话不能出现在普通 admin 的 overview、sessions、workspaces 和用户详情中；只能在 super_admin 的 `/admin/index` 异常列表中显示为 `unowned`，用于排查索引或历史数据问题。
 
 ## 7. 数据来源与存储边界
 
@@ -198,7 +211,51 @@ P2 必须记录这些事件：
 
 P2 不记录每一次文件读取、会话详情读取或普通列表刷新，否则 audit 会被噪音淹没。
 
-## 9. 后端 API
+`user.view_observability` 不是每次 GET 都记录。为避免刷新页面产生审计噪音，只在以下情况记录：
+
+- actor 首次在一个 30 分钟窗口内查看某个 target 用户观测详情时记录一次 success。
+- actor 对 target 的查看请求被 403/404 拒绝时记录一次 failure，便于排查越权或误点。
+- 30 分钟窗口键为 `(actor_username, target_username, action)`，可通过查询最近一条 audit event 去重，不需要新增状态表。
+
+普通列表刷新、文件读取、会话详情读取仍不记录 audit。
+
+## 9. Admin 查询层
+
+P2 必须新增 admin 专用查询层，例如 `lib/session-index/admin-store.ts` 或在 `store.ts` 中显式导出 admin 方法。该层读取 P1 的 `session-index.db`，但不能复用 P1 单用户方法假装完成跨用户查询。
+
+P1 当前方法边界：
+
+- `listSessions(query)` 强制 `WHERE s.owner_username=@username`。
+- `searchSessions(query)` 强制 `WHERE s.owner_username=@username`。
+- `listWorkspaces(username)` 只返回单个 owner 的工作区。
+
+P2 新增方法必须覆盖以下能力：
+
+- `getAdminOverview(visibility)`：返回用户、会话、工作区、异常、最近活跃用户、最近活跃工作区、最近异常会话聚合。
+- `listAdminUsers(visibility, filters)`：把 auth 用户列表和 session-index owner 聚合合并，返回用户观测摘要。
+- `getAdminUserObservability(visibility, targetUsername)`：返回目标用户详情观测；必须先由 auth guard 确认 target 可见。
+- `listAdminSessions(visibility, filters)`：跨可见 owner 的会话分页列表，支持 owner、cwd、q、status、时间范围、sort。
+- `searchAdminSessions(visibility, filters)`：跨可见 owner 的 FTS 搜索，支持分页 total。
+- `listAdminWorkspaces(visibility, filters)`：跨可见 owner 的工作区分页列表，支持 owner、q、activeFrom、sort。
+- `getAdminIndexHealth(visibility, options)`：返回索引健康、异常列表和 stale 候选统计。
+- `rescanSessionIndexWithStats()`：强制扫描并返回统计；见 §10 索引健康。
+
+所有 admin 查询方法都接收显式 `visibility` 参数，而不是在 session-index 层重新读取 auth：
+
+```ts
+interface AdminVisibility {
+  actorUsername: string;
+  actorRole: "admin" | "super_admin";
+  visibleOwnerUsernames: string[];
+  includeUnownedIndexIssues: boolean;
+}
+```
+
+普通 admin 的 `visibleOwnerUsernames` 只包含普通 user。super_admin 包含所有已知用户。所有列表页默认排除 `owner_username IS NULL`；只有 `includeUnownedIndexIssues=true` 的 index health 异常列表可额外返回无主项。
+
+Admin 查询层需要专门测试 SQL total、分页、可见 owner 过滤、super_admin 排除、NULL owner 排除/展示规则，不能只测 route handler。
+
+## 10. 后端 API
 
 ### 总览
 
@@ -214,6 +271,8 @@ GET /api/admin/overview
 - 最近活跃用户：username、role、lastActiveAt、sessionCount、workspaceCount。
 - 最近活跃工作区：cwd、ownerUsername、sessionCount、lastActiveAt。
 - 最近异常会话：id、ownerUsername、cwd、status、indexError、modifiedAt。
+
+这些统计通过 admin 查询层聚合。普通 admin 的会话、工作区、异常统计只覆盖 `visibleOwnerUsernames` 中的普通用户；super_admin 覆盖所有已知 owner。无主会话不计入普通 overview；super_admin overview 可以在 Index Issues 中单独显示 `unownedIssueCount`。
 
 ### 用户列表
 
@@ -264,6 +323,13 @@ GET /api/admin/sessions?username=&cwd=&q=&status=&from=&to=&page=&pageSize=&sort
 
 普通 admin 不返回 super_admin owner 的会话。
 
+status 语义必须明确：
+
+- `normal`：`missing=0 AND orphaned=0 AND index_error IS NULL`。
+- `missing`：`missing=1`。
+- `orphaned`：`orphaned=1`，不要求 `index_error` 非空。
+- `index_error`：`index_error IS NOT NULL`，它不是独立 schema flag，而是错误字段过滤；可能与 `orphaned=1` 重叠。
+
 ### 跨用户工作区浏览
 
 ```text
@@ -293,12 +359,30 @@ POST /api/admin/index/rescan
 - staleCandidateCount：source 文件 mtime 比索引 mtime 新的候选数量，检测阶段只能 stat，不解析 jsonl。
 - 异常列表：missing/orphaned/index_error session 的 id、path、cwd、ownerUsername、modifiedAt、indexedAt、indexError。
 
+Index Health 的 `GET` 不得调用 `getSessionIndexStore()`，因为它会触发带 10 秒节流的 `syncSessionIndex()`，从而把 stale 候选消费掉或让指标抖动。它必须直接打开 session-index db，执行只读统计；`staleCandidateCount` 通过 `scanSessionFiles(getSessionsDir())` 做 readdir+stat，然后与 `sessions.path/source_mtime_ms` 比较得到，不解析 jsonl、不写库、不受 `SYNC_THROTTLE_MS` 影响。
+
+普通 admin 的 Index Health 只显示其可见 owner 的统计和异常；super_admin 可以看到所有 owner，并额外看到 `owner_username IS NULL` 的无主异常项。
+
 `POST /rescan`：
 
 - 仅 `super_admin` 可调用。
-- 触发 `syncSessionIndex(..., true)`。
+- 调用新增的带统计扫描能力，不直接调用当前返回 `void` 的 `syncSessionIndex(..., true)`。
 - 返回扫描统计：scanned、indexed、unchanged、markedMissing、errors。
 - 写入 `admin_audit_events`。
+
+P2 必须改造 P1 同步能力或新增并复用一个底层 scanner 函数，使强制 rescan 返回统计：
+
+```ts
+interface SessionIndexSyncStats {
+  scanned: number;
+  indexed: number;
+  unchanged: number;
+  markedMissing: number;
+  errors: Array<{ path: string; error: string }>;
+}
+```
+
+推荐方案是把当前 `syncSessionIndex()` 的核心循环提取为 `syncSessionIndexWithStats(db, { force, throttle })`，让原 `syncSessionIndex()` 继续保持现有调用语义并忽略返回值。这样 P1 runtime hook 行为保持兼容，P2 rescan 可以拿到统计。
 
 ### 审计列表
 
@@ -311,9 +395,9 @@ GET /api/admin/audit?actor=&target=&action=&status=&from=&to=&page=&pageSize=
 - 自己发起的事件。
 - 目标为普通 user 的事件。
 
-super_admin 可看到全部。
+super_admin 可看到全部。普通 admin 看到目标为 `admin` 或 `super_admin` 的事件时必须被过滤掉，即使事件由自己发起也不能泄露高权限目标的私有标识。
 
-## 10. 前端体验
+## 11. 前端体验
 
 P2 管理界面应是安静、密集、可扫描的操作型后台，不做营销式布局。
 
@@ -373,7 +457,7 @@ P2 管理界面应是安静、密集、可扫描的操作型后台，不做营�
 - 筛选 actor、target、action、status、time range。
 - metadata 默认折叠，只显示 summary。
 
-## 11. 错误处理与状态
+## 12. 错误处理与状态
 
 - 所有 admin API 返回 401 时，前端应跳回登录或工作台入口。
 - 403 必须显示权限不足状态，不能当作空数据。
@@ -382,17 +466,18 @@ P2 管理界面应是安静、密集、可扫描的操作型后台，不做营�
 - 索引数据库不可用时，Overview 和 Index Health 仍应展示用户统计，并明确标记 index unavailable。
 - Rescan 失败必须写 failure audit event，并在 UI 中显示错误摘要。
 
-## 12. 测试与验收
+## 13. 测试与验收
 
 ### 后端测试
 
 - 审计 store 单测：写入、分页、actor/target/action/status/time 过滤、metadata JSON。
 - 管理权限单测：普通 user 不能访问 admin API；admin 不能查看 super_admin；super_admin 可查看全部。
+- Admin session-index 查询层单测：跨 owner 聚合、visibleOwnerUsernames 过滤、NULL owner 默认排除、super_admin index health 可见无主异常。
 - Overview 查询测试：用户统计、会话统计、工作区统计、异常统计准确。
 - 用户观测测试：按目标用户返回 session/workspace/issue 统计；不存在用户 404；越权 403。
 - 跨用户 sessions/workspaces 查询测试：分页 total 准确，普通 admin 不返回 super_admin 数据。
-- Index Health 测试：missing/orphaned/index_error 统计和异常列表准确；rescan 仅 super_admin 可触发。
-- 管理行为审计集成测试：disable/enable/role_update/delete/rescan 成功和失败都记录。
+- Index Health 测试：missing/orphaned/index_error 统计和异常列表准确；GET 不触发 sync；staleCandidateCount 只 stat 不解析；rescan 仅 super_admin 可触发并返回统计。
+- 管理行为审计集成测试：disable/enable/role_update/delete/rescan 成功和失败都记录；user.view_observability 在 30 分钟窗口内去重。
 
 ### 前端测试
 
@@ -429,13 +514,13 @@ npm run test:release
 
 最终合回 `feat/session-workspace-experience` 前，必须按 P2 plan 指定的 gate 完整验证。
 
-## 13. 与 P1/P3 的关系
+## 14. 与 P1/P3 的关系
 
-P1 已完成普通用户会话与工作区体验。P2 复用 P1 的索引和元数据作为管理员观测基础，不改变 P1 普通用户主流程。
+P1 已完成普通用户会话与工作区体验。P2 读取 P1 的索引和元数据作为管理员观测基础，但新增 admin 跨用户查询层和 rescan 统计能力，不改变 P1 普通用户主流程。
 
 P3 将处理模型和工具使用体验，包括 provider/model 默认值、工具 preset、会话模板和上下文状态等。P2 不应提前实现这些能力，但 P2 的审计和 admin shell 应允许未来 P3 增加独立入口。
 
-## 14. 开发分支与服务要求
+## 15. 开发分支与服务要求
 
 P2 implementation 必须从 `feat/session-workspace-experience` fork 子分支，例如：
 
@@ -453,4 +538,3 @@ HOME=/home/hsops/.pi-admin-observability-dev-home
 ```
 
 如果实际端口或 HOME 不同，必须在 P2 plan 和最终验收记录中写清楚。
-
