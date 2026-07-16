@@ -217,11 +217,11 @@ P2 必须记录这些事件：
 
 P2 不记录每一次文件读取、会话详情读取或普通列表刷新，否则 audit 会被噪音淹没。
 
-审计接入不是只新增 audit 列表 API。P2 必须改造现有用户管理端点的成功与失败分支，包括：
+审计接入不是只新增 audit 列表 API。P2 必须改造现有用户管理端点的成功与失败分支。计划阶段必须按实际路由文件对齐，不按概念 URL 猜文件位置。当前已存在的用户管理路由包括：
 
-- `POST /api/admin/users/[username]/disable`
-- `PATCH /api/admin/users/[username]`
-- `DELETE /api/admin/users/[username]`
+- `app/api/admin/users/[username]/disable/route.ts`：`POST /api/admin/users/[username]/disable`，负责 disable/enable。
+- `app/api/admin/users/[username]/route.ts`：`PATCH /api/admin/users/[username]`，负责 role update。
+- `app/api/admin/users/[username]/route.ts`：`DELETE /api/admin/users/[username]`，负责 delete user。
 
 这些端点的权限拒绝、目标不存在、参数错误、业务失败和成功返回都应统一写入 audit。实现时应提供小型 helper，避免每个 route 手写不一致的 try/catch 和 failure 记录。
 
@@ -289,6 +289,12 @@ GET /api/admin/overview
 - 最近异常会话：id、ownerUsername、cwd、status、indexError、modifiedAt。
 
 这些统计通过 admin 查询层聚合。普通 admin 的会话、工作区、异常统计只覆盖 `visibleOwnerUsernames` 中的普通用户；super_admin 覆盖所有已知 owner。无主会话不计入普通 overview；super_admin overview 可以在 Index Issues 中单独显示 `unownedIssueCount`。
+
+Overview 顶部用户统计口径必须显式区分 actor：
+
+- `super_admin`：用户统计读取 auth.db 全量用户，包含 `user`、`admin`、`super_admin`，并分别返回 role/status 计数。
+- 普通 `admin`：默认用户统计只统计其可观察对象，即 `role='user'` 的用户，包含 enabled 与 disabled；不把 `admin`/`super_admin` 计入 total，避免顶部用户数和下方可观察列表口径不一致。
+- 若未来需要展示全站管理员数量，必须用单独字段如 `systemRoleCounts`，不能混进普通 admin 的 `totalUsers`。
 
 ### 用户列表
 
