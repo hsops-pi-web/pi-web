@@ -9,7 +9,10 @@ declare global {
 }
 
 export function getDb(): Database.Database {
-  if (globalThis.__piAuthDb) return globalThis.__piAuthDb;
+  if (globalThis.__piAuthDb) {
+    migrateAdminAudit(globalThis.__piAuthDb);
+    return globalThis.__piAuthDb;
+  }
   const dir = getPiWebAuthDataDir();
   mkdirSync(dir, { recursive: true });
   const db = new Database(getAuthDbPath());
