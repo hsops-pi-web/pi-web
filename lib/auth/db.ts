@@ -32,6 +32,21 @@ export function getDb(): Database.Database {
       model_id TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS user_tool_presets (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      tool_names_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_tool_presets_username ON user_tool_presets(username);
+    CREATE TABLE IF NOT EXISTS user_tool_preset_defaults (
+      username TEXT PRIMARY KEY,
+      preset_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   const columns = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
   const hasColumn = (name: string) => columns.some((column) => column.name === name);

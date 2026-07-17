@@ -27,12 +27,14 @@ interface Props {
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
+  onSaveModelDefault?: () => void;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
   compactError?: string | null;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
+  onSaveToolDefault?: () => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   onThinkingLevelChange?: (level: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh") => void;
   availableThinkingLevels?: string[] | null;
@@ -139,8 +141,9 @@ function cleanupRecording(recording: ActiveRecording) {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, modelNames, modelList, onModelChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, modelNames, modelList, onModelChange, onSaveModelDefault,
   onCompact, onAbortCompaction, isCompacting, compactError, toolPreset, onToolPresetChange,
+  onSaveToolDefault,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo,
   soundEnabled, onSoundToggle,
@@ -1061,6 +1064,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                           })}
                         </div>
                       ))}
+                      <div style={{ borderTop: "1px solid var(--border)", padding: 4 }}>
+                        {onSaveModelDefault && model && (
+                          <button
+                            onClick={() => { setModelDropdownOpen(false); onSaveModelDefault(); }}
+                            style={{ width: "100%", padding: "7px 8px", border: "none", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, textAlign: "left" }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+                          >
+                            Save model as default
+                          </button>
+                        )}
+                        <a
+                          href="/settings/models-tools"
+                          style={{ display: "block", padding: "7px 8px", color: "var(--text-muted)", textDecoration: "none", fontSize: 12 }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+                        >
+                          Models & tools settings
+                        </a>
+                      </div>
                     </div>
                     );
                   })()}
@@ -1233,6 +1256,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                         </button>
                       );
                     })}
+                    <div style={{ borderTop: "1px solid var(--border)", padding: 4 }}>
+                      {onSaveToolDefault && (
+                        <button
+                          onClick={() => { setToolDropdownOpen(false); onSaveToolDefault(); }}
+                          style={{ width: "100%", padding: "7px 8px", border: "none", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, textAlign: "left" }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+                        >
+                          Save tools as default
+                        </button>
+                      )}
+                      <a
+                        href="/settings/models-tools"
+                        style={{ display: "block", padding: "7px 8px", color: "var(--text-muted)", textDecoration: "none", fontSize: 12 }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+                      >
+                        Tool preset settings
+                      </a>
+                    </div>
                   </div>
                 )}
               </div>
