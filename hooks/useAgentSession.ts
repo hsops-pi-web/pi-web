@@ -126,6 +126,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
+  const [modelsLoadKey, setModelsLoadKey] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -704,7 +705,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
       }
     }).catch(() => {});
-  }, [isNew, modelsRefreshKey, setNewSessionModel]);
+  }, [isNew, modelsRefreshKey, modelsLoadKey, setNewSessionModel]);
+
+  useEffect(() => {
+    const onFocus = () => setModelsLoadKey((k) => k + 1);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") setModelsLoadKey((k) => k + 1);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // Compact error auto-dismiss
   useEffect(() => {
