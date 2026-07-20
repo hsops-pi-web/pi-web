@@ -112,12 +112,13 @@ main() {
   [[ -n "${PI_WEB_RELEASE_TOKEN:-}" && -n "${REGISTER_KEYWORD:-}" ]] || die "release environment is incomplete"
 
   mkdir -p "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/releases" "$BACKUP_ROOT"
-  RELEASE_ID="pending-$$"
-  RELEASE_LOG="$DEPLOY_ROOT/logs/$RELEASE_ID.log"
-  export RELEASE_ID RELEASE_LOG PRODUCTION_HOME
-  local phase_started
+  RELEASE_LOG="$DEPLOY_ROOT/logs/pending-$$.log"
+  export RELEASE_LOG PRODUCTION_HOME
+  local phase_started build_output
   phase_started=$(now_ms)
-  new_release=$("$BUILD_RELEASE_BIN")
+  build_output=$("$BUILD_RELEASE_BIN")
+  printf '%s\n' "$build_output" >&2
+  new_release=$(printf '%s\n' "$build_output" | awk 'NF { line = $0 } END { print line }')
   new_release=$(readlink -f "$new_release")
   [[ "$new_release" == "$DEPLOY_ROOT/releases/"* ]] || die "build returned a release outside deploy root"
   mapfile -t new_manifest < <(read_manifest "$new_release")

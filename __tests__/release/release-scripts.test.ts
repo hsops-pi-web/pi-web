@@ -210,6 +210,7 @@ function releaseFixture(scenario: string, options: { existingReleases?: number }
   const home = join(root, "home");
   const bin = join(root, "bin");
   const eventsPath = join(root, "events");
+  const buildReleaseIdPath = join(root, "build-release-id");
   const nowPath = join(root, "now");
   const healthCountPath = join(root, "health-count");
   const envFile = join(root, "release.env");
@@ -247,7 +248,9 @@ function releaseFixture(scenario: string, options: { existingReleases?: number }
   const build = join(bin, "build-release");
   executable(build, `
 printf 'build\n' >> "$PI_WEB_TEST_EVENTS"
+printf '%s\n' "\${RELEASE_ID-}" > "$PI_WEB_TEST_BUILD_RELEASE_ID"
 case "$PI_WEB_TEST_SCENARIO" in verify-fails|staging-fails) exit 20;; esac
+printf 'build output noise\n'
 printf '%s\n' "$PI_WEB_TEST_NEW_RELEASE"
 `);
   const disk = join(bin, "disk-check");
@@ -342,6 +345,7 @@ exit 2
     PI_WEB_SLEEP_BIN: sleep,
     PI_WEB_NODE_BIN: process.execPath,
     PI_WEB_TEST_EVENTS: eventsPath,
+    PI_WEB_TEST_BUILD_RELEASE_ID: buildReleaseIdPath,
     PI_WEB_TEST_SCENARIO: scenario,
     PI_WEB_TEST_NEW_RELEASE: newRelease,
     PI_WEB_TEST_NEW_ID: newName,
@@ -368,6 +372,7 @@ exit 2
       return spawnSync("bash", ["scripts/release-production.sh", ...args], { cwd: resolve("."), env: environment, encoding: "utf8" });
     },
     events() { return readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean); },
+    buildReleaseId() { return readFileSync(buildReleaseIdPath, "utf8").trim(); },
     currentTarget() { return realpathSync(join(deploy, "current")); },
     previousTarget() { return realpathSync(join(deploy, "previous")); },
     remainingReleaseNames() { return readdirSync(releases).sort(); },
@@ -416,6 +421,13 @@ test("normal releases reject the one-time legacy migration flags", () => {
   const result = fixture.runWithArgs(["--allow-legacy-stop"]);
   assert.notEqual(result.status, 0);
   assert.deepEqual(fixture.events(), []);
+});
+
+test("release production does not pass pending log id into build release", () => {
+  const fixture = releaseFixture("success");
+  const result = fixture.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fixture.buildReleaseId().startsWith("pending-"), false);
 });
 
 test("release retention preserves current and previous and keeps four total", () => {
