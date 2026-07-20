@@ -6,6 +6,9 @@ const eslintConfig = [
     ignores: [
       ".claude/**",
       ".codex/**",
+      ".next/**",
+      ".worktrees/**",
+      "out/**",
     ],
   },
   ...coreWebVitals,
