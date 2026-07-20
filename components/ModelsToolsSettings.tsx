@@ -3,13 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ModelsConfig } from "./ModelsConfig";
-import { ToolPresetManager } from "./ToolPresetManager";
 
-type TabId = "models" | "tools" | "defaults" | "tests";
+type TabId = "models" | "defaults" | "tests";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "models", label: "Models" },
-  { id: "tools", label: "Tool presets" },
   { id: "defaults", label: "Defaults" },
   { id: "tests", label: "Connection tests" },
 ];
@@ -27,7 +25,7 @@ export function ModelsToolsSettings() {
             <h1 style={{ margin: 0, fontSize: 18, lineHeight: 1.2 }}>Models & tools</h1>
           </div>
           <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: 12 }}>
-            Manage providers, model defaults, custom tool presets, and connection checks.
+            Manage model providers, model defaults, and connection checks.
           </p>
         </div>
       </header>
@@ -61,13 +59,12 @@ export function ModelsToolsSettings() {
 
         <section style={{ flex: 1, minWidth: 0, padding: 18, overflow: "auto" }}>
           {activeTab === "models" && <ModelsConfig embedded />}
-          {activeTab === "tools" && <ToolPresetManager />}
           {activeTab === "defaults" && (
             <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 18, maxWidth: 720 }}>
               <h2 style={{ margin: 0, fontSize: 16 }}>Defaults</h2>
               <p style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.5 }}>
                 Personal model defaults are saved when you choose a model in chat. Global model defaults remain in the Models tab.
-                Personal tool defaults are managed in Tool presets and are applied to new sessions unless chat sends an explicit preset.
+                Chat tool selection continues to use the existing off/default/full quick control.
               </p>
             </div>
           )}

@@ -6,9 +6,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { getUserRoot, resolveExistingAndCheck, resolveParentAndCheck } from "@/lib/auth/paths";
 import { setUserModelPreference } from "@/lib/auth/model-preferences";
 import { getUserModelPreference } from "@/lib/auth/model-preferences";
-import { getUserToolPresets } from "@/lib/auth/tool-presets";
 import { applyNewSessionModel } from "@/lib/model-selection";
-import { resolveToolNamesForPreset, resolveToolPresetDefault } from "@/lib/tool-presets";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
 
@@ -47,12 +45,6 @@ export async function POST(req: Request) {
     }
     const { provider, modelId, rememberModel, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; rememberModel?: boolean; toolNames?: string[]; thinkingLevel?: string; [key: string]: unknown };
     const requestedModel = provider && modelId ? { provider, modelId } : null;
-    let effectiveToolNames = toolNames;
-    if (effectiveToolNames === undefined) {
-      const toolPresets = getUserToolPresets(username);
-      const defaultPreset = resolveToolPresetDefault(toolPresets.defaultPresetId);
-      effectiveToolNames = resolveToolNamesForPreset(defaultPreset.id, toolPresets.custom) ?? undefined;
-    }
     const storedPreference = getUserModelPreference(username);
     const availablePreference = storedPreference && ModelRegistry
       .create(AuthStorage.create())
@@ -64,7 +56,7 @@ export async function POST(req: Request) {
       getProcessLifecycle().assertAcceptingAgentCommands();
       mkdirSync(cwd, { recursive: true });
       const tempKey = `__new__${Date.now()}`;
-      const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, effectiveToolNames);
+      const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
       await applyNewSessionModel(
         session,
         username,
