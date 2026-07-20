@@ -126,6 +126,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
+  const [modelsLoadKey, setModelsLoadKey] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -501,20 +502,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew, setNewSessionModel]);
 
-  const handleSaveModelDefault = useCallback(async () => {
-    const selected = displayModel;
-    if (!selected) return;
-    try {
-      await authFetch("/api/models/default", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: selected.provider, modelId: selected.modelId }),
-      });
-    } catch (e) {
-      console.error("Failed to save model default:", e);
-    }
-  }, [displayModel]);
-
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid || isCompacting) return;
@@ -636,18 +623,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [setToolPresetState]);
 
-  const handleSaveToolDefault = useCallback(async () => {
-    try {
-      await authFetch("/api/tool-presets/default", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ presetId: toolPreset }),
-      });
-    } catch (e) {
-      console.error("Failed to save tool default:", e);
-    }
-  }, [toolPreset]);
-
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
@@ -730,7 +705,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
       }
     }).catch(() => {});
-  }, [isNew, modelsRefreshKey, setNewSessionModel]);
+  }, [isNew, modelsRefreshKey, modelsLoadKey, setNewSessionModel]);
+
+  useEffect(() => {
+    const onFocus = () => setModelsLoadKey((k) => k + 1);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") setModelsLoadKey((k) => k + 1);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // Compact error auto-dismiss
   useEffect(() => {
@@ -751,9 +739,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleSaveModelDefault,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handleAbortCompaction,
-    handleToolPresetChange, handleSaveToolDefault, handleThinkingLevelChange, loadTools, setActiveLeafId, setData, setMessages,
+    handleToolPresetChange, handleThinkingLevelChange, loadTools, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,
