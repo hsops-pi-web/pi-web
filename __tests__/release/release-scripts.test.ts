@@ -80,16 +80,27 @@ test("release shell files pass bash syntax validation", () => {
 
 test("build-release refuses a dirty or non-main source before npm runs", () => {
   const root = tempRoot();
+  const source = join(root, "source");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "package.json"), "{}\n");
+  assert.equal(spawnSync("git", ["init", "-b", "main"], { cwd: source }).status, 0);
+  assert.equal(spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: source }).status, 0);
+  assert.equal(spawnSync("git", ["config", "user.name", "Test"], { cwd: source }).status, 0);
+  assert.equal(spawnSync("git", ["add", "package.json"], { cwd: source }).status, 0);
+  assert.equal(spawnSync("git", ["commit", "-m", "init"], { cwd: source }).status, 0);
+  writeFileSync(join(source, "dirty.txt"), "dirty\n");
+
   const marker = join(root, "npm-called");
   const fakeNpm = join(root, "npm");
   executable(fakeNpm, `touch ${JSON.stringify(marker)}`);
   const result = run("scripts/build-release.sh", {
-    PI_WEB_SOURCE_ROOT: resolve("."),
+    PI_WEB_SOURCE_ROOT: source,
     PI_WEB_DEPLOY_ROOT: join(root, "deploy"),
     PI_WEB_NPM_BIN: fakeNpm,
   });
   assert.notEqual(result.status, 0);
   assert.equal(result.stderr.includes("clean main"), true);
+  assert.equal(existsSync(marker), false);
 });
 
 test("build-release rejects test-only overrides outside NODE_ENV=test", () => {
