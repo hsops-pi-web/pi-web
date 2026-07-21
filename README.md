@@ -96,6 +96,37 @@ Runtime data is stored outside the source repository:
 
 Do not commit these files to a public repository.
 
+## Required Configuration
+
+Before running a shared or production deployment, review these files and values:
+
+| Area | File or variable | What to configure |
+| --- | --- | --- |
+| Registration | `REGISTER_KEYWORD` | Invitation keyword required for new users. Leave it unset only if registration should fail closed. |
+| Super admin | `PI_WEB_SUPER_ADMIN_USERNAME` | Username that is always treated as `super_admin`; defaults to `admin`. |
+| App data home | `HOME` | Controls where `.pi-web-auth/`, `pi-users/`, and `.pi/agent/` are stored. The example systemd unit uses `/var/lib/pi-web-auth`. |
+| Release env | `/etc/pi-web-auth/release.env` | Production environment file loaded by systemd and release scripts. Store `REGISTER_KEYWORD`, `PI_WEB_RELEASE_TOKEN`, `PI_WEB_SUPER_ADMIN_USERNAME`, and any path overrides here. Set mode `0600`. |
+| systemd unit | `systemd/pi-web-auth.service.example` | Copy to `/etc/systemd/system/pi-web-auth.service` and adjust `WorkingDirectory`, `EnvironmentFile`, `HOME`, `PORT`, `HOSTNAME`, `ExecStart`, and `ExecStop` if your install paths differ. |
+| Model registry | `~/.pi/agent/models.json` | Providers, model IDs, display names, base URLs, compatibility flags, context windows, and provider API keys for custom providers. |
+| Default model | `~/.pi/agent/settings.json` | `defaultProvider` and `defaultModel` used for new chats. |
+| Provider auth | `~/.pi/agent/auth.json` | API keys managed by Pi's provider login/auth flow. Do not commit or share this file. |
+| Upload limits | `PI_WEB_UPLOAD_MAX_MB`, `PI_WEB_UPLOAD_MAX_COUNT` | Maximum document size and count per upload. |
+| Release paths | `PI_WEB_SOURCE_ROOT`, `PI_WEB_DEPLOY_ROOT`, `PI_WEB_BACKUP_ROOT`, `PI_WEB_PRODUCTION_HOME`, `PI_WEB_RELEASE_ENV` | Override the public defaults when installing outside `/opt/pi-web-auth`, `/var/lib/pi-web-auth`, or `/var/backups/pi-web-auth`. |
+
+For OpenAI-compatible custom providers, the API key can be stored in the provider entry in `models.json` as `apiKey`. For providers authenticated through Pi's own login flow, keys are stored in `auth.json`. Both files are secrets and must stay outside Git.
+
+Minimal `/etc/pi-web-auth/release.env` example:
+
+```bash
+REGISTER_KEYWORD=change-me
+PI_WEB_RELEASE_TOKEN=<random-hex-token>
+PI_WEB_SUPER_ADMIN_USERNAME=admin
+PI_WEB_PRODUCTION_HOME=/var/lib/pi-web-auth
+PI_WEB_SOURCE_ROOT=/opt/pi-web-auth/source
+PI_WEB_DEPLOY_ROOT=/opt/pi-web-auth
+PI_WEB_BACKUP_ROOT=/var/backups/pi-web-auth
+```
+
 ## Important Environment Variables
 
 - `REGISTER_KEYWORD`: invitation keyword required for registration

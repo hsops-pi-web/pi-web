@@ -98,6 +98,37 @@ npm run verify
 
 不要把这些文件提交到公开仓库。
 
+## 必配配置文件
+
+共享部署或生产部署前，建议逐项检查这些文件和配置：
+
+| 配置项 | 文件或变量 | 需要配置什么 |
+| --- | --- | --- |
+| 注册 | `REGISTER_KEYWORD` | 新用户注册邀请码。不配置时注册会 fail closed。 |
+| 超级管理员 | `PI_WEB_SUPER_ADMIN_USERNAME` | 始终被视为 `super_admin` 的用户名，默认是 `admin`。 |
+| 应用数据 HOME | `HOME` | 决定 `.pi-web-auth/`、`pi-users/`、`.pi/agent/` 存储在哪里。示例 systemd unit 使用 `/var/lib/pi-web-auth`。 |
+| 发布环境文件 | `/etc/pi-web-auth/release.env` | systemd 和 release 脚本读取的生产环境文件。建议放 `REGISTER_KEYWORD`、`PI_WEB_RELEASE_TOKEN`、`PI_WEB_SUPER_ADMIN_USERNAME` 和路径覆盖变量，权限设为 `0600`。 |
+| systemd unit | `systemd/pi-web-auth.service.example` | 复制到 `/etc/systemd/system/pi-web-auth.service` 后，如果路径不同，需要修改 `WorkingDirectory`、`EnvironmentFile`、`HOME`、`PORT`、`HOSTNAME`、`ExecStart`、`ExecStop`。 |
+| 模型注册表 | `~/.pi/agent/models.json` | provider、模型 ID、展示名称、base URL、兼容性参数、上下文窗口和自定义 provider 的 API key。 |
+| 默认模型 | `~/.pi/agent/settings.json` | 新聊天使用的 `defaultProvider` 和 `defaultModel`。 |
+| Provider 认证 | `~/.pi/agent/auth.json` | Pi provider 登录/认证流程管理的 API key。不要提交或分享。 |
+| 上传限制 | `PI_WEB_UPLOAD_MAX_MB`、`PI_WEB_UPLOAD_MAX_COUNT` | 单个文档大小上限和单次上传数量上限。 |
+| 发布路径 | `PI_WEB_SOURCE_ROOT`、`PI_WEB_DEPLOY_ROOT`、`PI_WEB_BACKUP_ROOT`、`PI_WEB_PRODUCTION_HOME`、`PI_WEB_RELEASE_ENV` | 如果不使用 `/opt/pi-web-auth`、`/var/lib/pi-web-auth`、`/var/backups/pi-web-auth`，用这些变量覆盖默认路径。 |
+
+OpenAI-compatible 自定义 provider 的 API key 可以放在 `models.json` 的 provider 配置里，字段名是 `apiKey`。通过 Pi 自身登录流程认证的 provider，key 会放在 `auth.json`。这两个文件都属于敏感配置，必须放在 Git 仓库之外。
+
+最小 `/etc/pi-web-auth/release.env` 示例：
+
+```bash
+REGISTER_KEYWORD=change-me
+PI_WEB_RELEASE_TOKEN=<random-hex-token>
+PI_WEB_SUPER_ADMIN_USERNAME=admin
+PI_WEB_PRODUCTION_HOME=/var/lib/pi-web-auth
+PI_WEB_SOURCE_ROOT=/opt/pi-web-auth/source
+PI_WEB_DEPLOY_ROOT=/opt/pi-web-auth
+PI_WEB_BACKUP_ROOT=/var/backups/pi-web-auth
+```
+
 ## 重要环境变量
 
 - `REGISTER_KEYWORD`：注册邀请码。
