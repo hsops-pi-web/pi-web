@@ -51,7 +51,22 @@ Pi coding agent Web UI 的公开多用户 fork。它在 Pi agent runtime 之上�
 
 - Node.js 22 或更新版本
 - npm
+- git
+- 生产 release 脚本需要 rsync、curl 和 systemd
 - 可用的 Pi agent runtime：`@earendil-works/pi-coding-agent`
+
+## 部署路径说明
+
+大部分配置路径都和进程的 `HOME` 有关。
+
+| 运行方式 | `HOME` 指向哪里 | `~/.pi/agent/models.json` 的实际示例路径 |
+| --- | --- | --- |
+| 本地开发 | 当前 shell 用户的 home 目录 | `/home/alice/.pi/agent/models.json` |
+| 简单生产命令 | 运行 `npm run start` 的 shell 里的 `HOME` | 取决于服务用户 |
+| 示例 systemd unit | `/var/lib/pi-web-auth` | `/var/lib/pi-web-auth/.pi/agent/models.json` |
+| 用户级 systemd unit | 当前 Linux 用户的 home 目录 | `/home/piweb/.pi/agent/models.json` |
+
+如果按照本文档的生产示例部署，请把 `/var/lib/pi-web-auth` 视为应用数据 home。也就是说，`~/.pi/agent/models.json` 实际是 `/var/lib/pi-web-auth/.pi/agent/models.json`。
 
 ## 本地开发
 
@@ -173,6 +188,128 @@ PI_WEB_BACKUP_ROOT=/var/backups/pi-web-auth
 
 ## 生产部署选项
 
+### 推荐部署流程
+
+对外或团队环境建议按这个顺序部署：
+
+1. 准备主机、数据目录和 `/etc/pi-web-auth/release.env`。
+2. 在生产数据 home 下配置至少一个模型 provider 和默认模型。
+3. 在干净 checkout 中运行 `npm run verify`。
+4. 先用简单生产命令启动一次，确认登录和模型配置可用。
+5. 安装 systemd service，用于长期运行。
+6. 后续升级使用 standalone release scripts。
+
+简单生产命令更适合第一次 smoke test。standalone release 流程更适合长期生产运行，因为它会构建不可变 release、做 staging 验证、保留 `current` 和 `previous`，并在切换版本前备份数据。
+
+### 准备生产主机
+
+先安装 Node.js 22 或更新版本、npm、git、curl、rsync 和 systemd。然后准备源码、数据、备份和 release 配置目录：
+
+```bash
+sudo mkdir -p /opt/pi-web-auth/source /opt/pi-web-auth/releases /opt/pi-web-auth/staging /opt/pi-web-auth/logs
+sudo mkdir -p /var/lib/pi-web-auth/.pi/agent /var/lib/pi-web-auth/.pi-web-auth /var/lib/pi-web-auth/pi-users
+sudo mkdir -p /var/backups/pi-web-auth /etc/pi-web-auth
+sudo chown -R "$USER":"$USER" /opt/pi-web-auth /var/lib/pi-web-auth /var/backups/pi-web-auth
+sudo install -m 600 /dev/null /etc/pi-web-auth/release.env
+sudo chown "$USER":"$USER" /etc/pi-web-auth/release.env
+```
+
+克隆项目：
+
+```bash
+git clone https://github.com/luciferhs/pi-web.git /opt/pi-web-auth/source
+cd /opt/pi-web-auth/source
+npm ci
+npm run verify
+```
+
+写入生产环境文件：
+
+```bash
+cat > /etc/pi-web-auth/release.env <<'EOF'
+REGISTER_KEYWORD=change-me
+PI_WEB_RELEASE_TOKEN=replace-with-a-random-long-token
+PI_WEB_SUPER_ADMIN_USERNAME=admin
+PI_WEB_PRODUCTION_HOME=/var/lib/pi-web-auth
+PI_WEB_SOURCE_ROOT=/opt/pi-web-auth/source
+PI_WEB_DEPLOY_ROOT=/opt/pi-web-auth
+PI_WEB_BACKUP_ROOT=/var/backups/pi-web-auth
+PI_WEB_RELEASE_ENV=/etc/pi-web-auth/release.env
+EOF
+chmod 600 /etc/pi-web-auth/release.env
+```
+
+对外暴露服务前，生成更强的 release token：
+
+```bash
+openssl rand -hex 32
+```
+
+把 `PI_WEB_RELEASE_TOKEN` 替换成生成的值。邀请用户前，也要修改 `REGISTER_KEYWORD`。
+
+### 首次登录前配置模型
+
+在生产 `HOME` 下创建模型注册表：
+
+```bash
+mkdir -p /var/lib/pi-web-auth/.pi/agent
+nano /var/lib/pi-web-auth/.pi/agent/models.json
+```
+
+OpenAI-compatible 示例：
+
+```json
+{
+  "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "api": "openai-completions",
+      "apiKey": "replace-with-your-api-key",
+      "models": [
+        {
+          "id": "gpt-5",
+          "name": "GPT-5"
+        }
+      ]
+    }
+  }
+}
+```
+
+设置默认模型：
+
+```bash
+cat > /var/lib/pi-web-auth/.pi/agent/settings.json <<'EOF'
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5"
+}
+EOF
+```
+
+OpenAI-compatible 自定义 provider 可以把 API key 放在 `models.json` 的 `apiKey` 字段。通过 Pi 自身登录流程认证的 provider，会把凭据存储在 `/var/lib/pi-web-auth/.pi/agent/auth.json`。
+
+`models.json`、`settings.json` 和 `auth.json` 都是运行时配置，不是源码文件，必须放在 Git 仓库之外。
+
+### 不使用 systemd 的首次 smoke test
+
+先从源码目录启动一次应用，确认注册、登录和模型加载正常：
+
+```bash
+cd /opt/pi-web-auth/source
+set -a
+source /etc/pi-web-auth/release.env
+set +a
+HOME=/var/lib/pi-web-auth npm run build
+HOME=/var/lib/pi-web-auth npm run start
+```
+
+打开 `http://<server-ip>:8000/login`。
+
+注册第一个超级管理员用户，用户名填写 `admin`，或者填写你在 `PI_WEB_SUPER_ADMIN_USERNAME` 中配置的值。注册时使用 `release.env` 里的 `REGISTER_KEYWORD`。密码在注册表单里设置，系统不会明文保存密码。
+
+登录后打开 Models 面板，确认配置的模型能看到。切换到 systemd 前，先发起一次测试聊天。
+
 ### 简单 Next.js 生产模式
 
 适合小型私有部署：
@@ -235,6 +372,93 @@ sudo systemctl stop pi-web-auth.service
 ```
 
 如果使用用户级 service，把 unit 复制到 `~/.config/systemd/user/pi-web-auth.service`，执行 `systemctl --user daemon-reload`，然后使用 `systemctl --user start|status|restart|stop pi-web-auth.service` 管理服务。如果安装路径和公开默认路径不同，需要同步修改 unit 里的 `WorkingDirectory`、`EnvironmentFile`、`HOME` 和 `ExecStart`。
+
+release 脚本默认使用 `systemctl --user`。如果希望不改脚本直接使用 release 流程，建议安装为用户级 service：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/pi-web-auth.service.example ~/.config/systemd/user/pi-web-auth.service
+systemctl --user daemon-reload
+systemctl --user enable pi-web-auth.service
+```
+
+如果希望用户退出登录后服务仍然运行，需要为该 Linux 用户开启 lingering：
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+### 第一次 standalone release
+
+第一次 standalone release 需要先生成 managed release 目录，并让 `/opt/pi-web-auth/current` 指向它，service 才能从 `/opt/pi-web-auth/current` 启动：
+
+```bash
+cd /opt/pi-web-auth/source
+set -a
+source /etc/pi-web-auth/release.env
+set +a
+scripts/build-release.sh
+```
+
+`scripts/build-release.sh` 输出的最后一行是 release 目录。把 `current` 指向它：
+
+```bash
+RELEASE_DIR=/opt/pi-web-auth/releases/<release-id>
+ln -sfn "$RELEASE_DIR" /opt/pi-web-auth/current
+```
+
+启动服务：
+
+```bash
+systemctl --user start pi-web-auth.service
+systemctl --user status pi-web-auth.service --no-pager
+```
+
+后续从一个健康 standalone release 升级时，执行：
+
+```bash
+cd /opt/pi-web-auth/source
+git pull --ff-only
+scripts/release-production.sh
+```
+
+release 脚本会构建新 release、做 staging 验证、备份生产数据、drain 当前工作、切换 `current` symlink、启动新版本、检查 readiness。如果新版本 readiness 失败，会回滚到 `previous`。
+
+### 健康检查
+
+服务启动后检查 HTTP endpoint：
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/health/live
+curl -fsS http://127.0.0.1:8000/api/health/ready
+```
+
+然后用浏览器打开登录页：
+
+```text
+http://<server-ip>:8000/login
+```
+
+如果浏览器访问不到，检查端口和日志：
+
+```bash
+ss -ltnp | grep 8000
+systemctl --user status pi-web-auth.service --no-pager
+journalctl --user -u pi-web-auth.service -n 200 --no-pager
+```
+
+### 常见问题排查
+
+| 现象 | 检查项 |
+| --- | --- |
+| 注册失败 | 确认 `/etc/pi-web-auth/release.env` 里的 `REGISTER_KEYWORD`，注册页填写同一个值。 |
+| 第一个用户不是 super admin | 确认注册用户名和 `PI_WEB_SUPER_ADMIN_USERNAME` 完全一致。 |
+| 模型列表为空 | 确认 service 的 `HOME`；使用示例 unit 时，模型文件必须在 `/var/lib/pi-web-auth/.pi/agent/models.json`。 |
+| API key 报错 | 检查 `models.json` 里的 `apiKey`、`baseUrl`、`api` 和 provider 兼容性参数。 |
+| systemd service 启动失败 | 检查 `WorkingDirectory`、`EnvironmentFile`、`HOME`、`ExecStart`，以及 `/opt/pi-web-auth/current/server.js` 是否存在。 |
+| 上传失败 | 检查 `PI_WEB_UPLOAD_MAX_MB`、`PI_WEB_UPLOAD_MAX_COUNT`、工作区写权限和磁盘空间。 |
+| release 脚本无法停止/启动服务 | 安装为用户级 service，或按环境设置 `PI_WEB_SYSTEMCTL_BIN` / `PI_WEB_SERVICE_NAME`。 |
+| ready check 失败 | 查看 `journalctl --user -u pi-web-auth.service -n 200 --no-pager`，并确认 `/var/lib/pi-web-auth/.pi-web-auth`、`/var/lib/pi-web-auth/pi-users`、`/var/lib/pi-web-auth/.pi/agent` 可写。 |
 
 ## 项目结构
 

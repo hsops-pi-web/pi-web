@@ -49,7 +49,22 @@ Some upstream `agegr/pi-web` features are intentionally not the focus of this fo
 
 - Node.js 22 or newer
 - npm
+- git
+- rsync, curl, and systemd for production release scripts
 - A working Pi agent runtime from `@earendil-works/pi-coding-agent`
+
+## Deployment Paths Explained
+
+Most configuration paths are relative to the process `HOME`.
+
+| Runtime mode | `HOME` points to | Example path for `~/.pi/agent/models.json` |
+| --- | --- | --- |
+| Local development | Your shell user's home directory | `/home/alice/.pi/agent/models.json` |
+| Simple production shell | The `HOME` value in the shell that runs `npm run start` | Depends on the service user |
+| Example systemd unit | `/var/lib/pi-web-auth` | `/var/lib/pi-web-auth/.pi/agent/models.json` |
+| User-level systemd unit | The Linux user's home directory | `/home/piweb/.pi/agent/models.json` |
+
+When following the production examples in this README, treat `/var/lib/pi-web-auth` as the application data home. That means `~/.pi/agent/models.json` becomes `/var/lib/pi-web-auth/.pi/agent/models.json`.
 
 ## Local Development
 
@@ -199,6 +214,128 @@ Default model settings live in `~/.pi/agent/settings.json`:
 
 ## Production Options
 
+### Recommended Deployment Flow
+
+For a public or team-facing environment, use this order:
+
+1. Prepare the host, data directories, and `/etc/pi-web-auth/release.env`.
+2. Configure at least one model provider and default model under the production data home.
+3. Run `npm run verify` from a clean checkout.
+4. Start the app once with the simple production command to verify login and model configuration.
+5. Install systemd service management for long-running operation.
+6. Use standalone release scripts for later upgrades.
+
+The simple production command is easier for the first smoke test. The standalone release flow is the better long-term production path because it builds immutable releases, verifies staging, keeps `current` and `previous`, and backs up data before switching versions.
+
+### Prepare A Production Host
+
+Install Node.js 22 or newer, npm, git, curl, rsync, and systemd. Then prepare the source, data, backup, and release configuration directories:
+
+```bash
+sudo mkdir -p /opt/pi-web-auth/source /opt/pi-web-auth/releases /opt/pi-web-auth/staging /opt/pi-web-auth/logs
+sudo mkdir -p /var/lib/pi-web-auth/.pi/agent /var/lib/pi-web-auth/.pi-web-auth /var/lib/pi-web-auth/pi-users
+sudo mkdir -p /var/backups/pi-web-auth /etc/pi-web-auth
+sudo chown -R "$USER":"$USER" /opt/pi-web-auth /var/lib/pi-web-auth /var/backups/pi-web-auth
+sudo install -m 600 /dev/null /etc/pi-web-auth/release.env
+sudo chown "$USER":"$USER" /etc/pi-web-auth/release.env
+```
+
+Clone the project:
+
+```bash
+git clone https://github.com/luciferhs/pi-web.git /opt/pi-web-auth/source
+cd /opt/pi-web-auth/source
+npm ci
+npm run verify
+```
+
+Write the production environment file:
+
+```bash
+cat > /etc/pi-web-auth/release.env <<'EOF'
+REGISTER_KEYWORD=change-me
+PI_WEB_RELEASE_TOKEN=replace-with-a-random-long-token
+PI_WEB_SUPER_ADMIN_USERNAME=admin
+PI_WEB_PRODUCTION_HOME=/var/lib/pi-web-auth
+PI_WEB_SOURCE_ROOT=/opt/pi-web-auth/source
+PI_WEB_DEPLOY_ROOT=/opt/pi-web-auth
+PI_WEB_BACKUP_ROOT=/var/backups/pi-web-auth
+PI_WEB_RELEASE_ENV=/etc/pi-web-auth/release.env
+EOF
+chmod 600 /etc/pi-web-auth/release.env
+```
+
+Generate a stronger release token before exposing the service:
+
+```bash
+openssl rand -hex 32
+```
+
+Replace `PI_WEB_RELEASE_TOKEN` with that value. Change `REGISTER_KEYWORD` before inviting users.
+
+### Configure Models Before First Login
+
+Create the model registry under the production `HOME`:
+
+```bash
+mkdir -p /var/lib/pi-web-auth/.pi/agent
+nano /var/lib/pi-web-auth/.pi/agent/models.json
+```
+
+OpenAI-compatible example:
+
+```json
+{
+  "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "api": "openai-completions",
+      "apiKey": "replace-with-your-api-key",
+      "models": [
+        {
+          "id": "gpt-5",
+          "name": "GPT-5"
+        }
+      ]
+    }
+  }
+}
+```
+
+Set the default model:
+
+```bash
+cat > /var/lib/pi-web-auth/.pi/agent/settings.json <<'EOF'
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5"
+}
+EOF
+```
+
+Use `apiKey` in `models.json` for custom OpenAI-compatible providers. Providers authenticated through Pi's own login flow store credentials in `/var/lib/pi-web-auth/.pi/agent/auth.json`.
+
+Keep `models.json`, `settings.json`, and `auth.json` outside Git. They are runtime configuration files, not source files.
+
+### First Smoke Test Without systemd
+
+Run the app once from the source checkout to verify registration, login, and model loading:
+
+```bash
+cd /opt/pi-web-auth/source
+set -a
+source /etc/pi-web-auth/release.env
+set +a
+HOME=/var/lib/pi-web-auth npm run build
+HOME=/var/lib/pi-web-auth npm run start
+```
+
+Open `http://<server-ip>:8000/login`.
+
+Register the first super admin user with username `admin`, or the value configured in `PI_WEB_SUPER_ADMIN_USERNAME`. Use the `REGISTER_KEYWORD` value from `release.env`. The password is created in the registration form and is not stored in plaintext.
+
+After login, open the Models panel and confirm the configured model appears. Start a test chat before moving to systemd.
+
 ### Simple Next.js Production Mode
 
 For a small private deployment:
@@ -242,7 +379,7 @@ PI_WEB_SUPER_ADMIN_USERNAME=admin
 
 The example unit is designed for a standalone release at `/opt/pi-web-auth/current` and runs the app on port `8000` with `HOME=/var/lib/pi-web-auth`.
 
-Install the unit:
+Install the unit for system-level management:
 
 ```bash
 sudo cp systemd/pi-web-auth.service.example /etc/systemd/system/pi-web-auth.service
@@ -261,6 +398,93 @@ sudo systemctl stop pi-web-auth.service
 ```
 
 For a user-level service, copy the unit to `~/.config/systemd/user/pi-web-auth.service`, run `systemctl --user daemon-reload`, and use `systemctl --user start|status|restart|stop pi-web-auth.service`. Adjust `WorkingDirectory`, `EnvironmentFile`, `HOME`, and `ExecStart` if your install paths differ from the public defaults.
+
+The release scripts use `systemctl --user` by default. If you want to use them unchanged, install the unit as a user-level service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/pi-web-auth.service.example ~/.config/systemd/user/pi-web-auth.service
+systemctl --user daemon-reload
+systemctl --user enable pi-web-auth.service
+```
+
+For long-running user services after logout, enable lingering for that Linux user:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+### First Standalone Release
+
+The first standalone release needs a managed release directory and a `current` symlink before the service can start from `/opt/pi-web-auth/current`:
+
+```bash
+cd /opt/pi-web-auth/source
+set -a
+source /etc/pi-web-auth/release.env
+set +a
+scripts/build-release.sh
+```
+
+The last line printed by `scripts/build-release.sh` is the release directory. Point `current` at it:
+
+```bash
+RELEASE_DIR=/opt/pi-web-auth/releases/<release-id>
+ln -sfn "$RELEASE_DIR" /opt/pi-web-auth/current
+```
+
+Start the service:
+
+```bash
+systemctl --user start pi-web-auth.service
+systemctl --user status pi-web-auth.service --no-pager
+```
+
+For later upgrades from a healthy standalone release, run:
+
+```bash
+cd /opt/pi-web-auth/source
+git pull --ff-only
+scripts/release-production.sh
+```
+
+The release script builds a new release, verifies it in staging, backs up production data, drains active work, switches the `current` symlink, starts the new release, checks readiness, and rolls back to `previous` if readiness fails.
+
+### Health Checks
+
+After starting the service, check the HTTP endpoints:
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/health/live
+curl -fsS http://127.0.0.1:8000/api/health/ready
+```
+
+Then open the login page from a browser:
+
+```text
+http://<server-ip>:8000/login
+```
+
+If the browser cannot connect, inspect the port and logs:
+
+```bash
+ss -ltnp | grep 8000
+systemctl --user status pi-web-auth.service --no-pager
+journalctl --user -u pi-web-auth.service -n 200 --no-pager
+```
+
+### Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Registration fails | Confirm `REGISTER_KEYWORD` in `/etc/pi-web-auth/release.env` and use the same value on the registration page. |
+| First user is not super admin | Confirm the registered username exactly matches `PI_WEB_SUPER_ADMIN_USERNAME`. |
+| Models are missing | Confirm the service `HOME`; with the example unit, models must be in `/var/lib/pi-web-auth/.pi/agent/models.json`. |
+| API key errors | Check `apiKey`, `baseUrl`, `api`, and provider compatibility flags in `models.json`. |
+| systemd service fails to start | Check `WorkingDirectory`, `EnvironmentFile`, `HOME`, `ExecStart`, and whether `/opt/pi-web-auth/current/server.js` exists. |
+| Uploads fail | Check `PI_WEB_UPLOAD_MAX_MB`, `PI_WEB_UPLOAD_MAX_COUNT`, workspace write permissions, and free disk space. |
+| Release script cannot stop/start service | Install the service as a user-level unit or set `PI_WEB_SYSTEMCTL_BIN`/`PI_WEB_SERVICE_NAME` for your environment. |
+| Ready check fails | Inspect `journalctl --user -u pi-web-auth.service -n 200 --no-pager` and verify `/var/lib/pi-web-auth/.pi-web-auth`, `/var/lib/pi-web-auth/pi-users`, and `/var/lib/pi-web-auth/.pi/agent` are writable. |
 
 ## Project Structure
 
