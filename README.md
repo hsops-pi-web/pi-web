@@ -207,6 +207,30 @@ REGISTER_KEYWORD=<registration-keyword>
 PI_WEB_SUPER_ADMIN_USERNAME=admin
 ```
 
+### Managing The Service With systemctl
+
+The example unit is designed for a standalone release at `/opt/pi-web-auth/current` and runs the app on port `8000` with `HOME=/var/lib/pi-web-auth`.
+
+Install the unit:
+
+```bash
+sudo cp systemd/pi-web-auth.service.example /etc/systemd/system/pi-web-auth.service
+sudo systemctl daemon-reload
+sudo systemctl enable pi-web-auth.service
+```
+
+Start, restart, stop, and inspect the service:
+
+```bash
+sudo systemctl start pi-web-auth.service
+sudo systemctl status pi-web-auth.service --no-pager
+sudo journalctl -u pi-web-auth.service -f
+sudo systemctl restart pi-web-auth.service
+sudo systemctl stop pi-web-auth.service
+```
+
+For a user-level service, copy the unit to `~/.config/systemd/user/pi-web-auth.service`, run `systemctl --user daemon-reload`, and use `systemctl --user start|status|restart|stop pi-web-auth.service`. Adjust `WorkingDirectory`, `EnvironmentFile`, `HOME`, and `ExecStart` if your install paths differ from the public defaults.
+
 ## Project Structure
 
 ```text

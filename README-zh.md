@@ -181,6 +181,30 @@ REGISTER_KEYWORD=<registration-keyword>
 PI_WEB_SUPER_ADMIN_USERNAME=admin
 ```
 
+### 使用 systemctl 管理服务
+
+示例 unit 适用于 `/opt/pi-web-auth/current` 下的 standalone release，并使用 `HOME=/var/lib/pi-web-auth` 在 `8000` 端口运行应用。
+
+安装系统级 unit：
+
+```bash
+sudo cp systemd/pi-web-auth.service.example /etc/systemd/system/pi-web-auth.service
+sudo systemctl daemon-reload
+sudo systemctl enable pi-web-auth.service
+```
+
+启动、重启、停止和查看日志：
+
+```bash
+sudo systemctl start pi-web-auth.service
+sudo systemctl status pi-web-auth.service --no-pager
+sudo journalctl -u pi-web-auth.service -f
+sudo systemctl restart pi-web-auth.service
+sudo systemctl stop pi-web-auth.service
+```
+
+如果使用用户级 service，把 unit 复制到 `~/.config/systemd/user/pi-web-auth.service`，执行 `systemctl --user daemon-reload`，然后使用 `systemctl --user start|status|restart|stop pi-web-auth.service` 管理服务。如果安装路径和公开默认路径不同，需要同步修改 unit 里的 `WorkingDirectory`、`EnvironmentFile`、`HOME` 和 `ExecStart`。
+
 ## 项目结构
 
 ```text
