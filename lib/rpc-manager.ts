@@ -1,0 +1,565 @@
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { existsSync, readdirSync, rmSync, statSync } from "fs";
+import path, { delimiter, join, resolve } from "path";
+import { cacheSessionPath, invalidateSessionPathCache } from "./session-reader";
+import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import {
+  abortAndShutdownSession,
+  getProcessLifecycle,
+  installProcessSignalHandlers,
+  ProcessDrainingError,
+  shutdownAgentSession,
+} from "./process-lifecycle";
+import {
+  assertSessionCommandAllowed,
+  createDeleteLock,
+  createDeleteWindowAbortError,
+  type DeleteLock,
+} from "./auth/delete-lock";
+import { canonicalizeExistingPrefix } from "./auth/paths";
+import { createSessionSettingsManager } from "./session-settings";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface AgentEvent {
+  type: string;
+  [key: string]: unknown;
+}
+
+export { shutdownAgentSession };
+
+type EventListener = (event: AgentEvent) => void;
+
+const BUILTIN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+const EXTENSION_ENTRY_FILES = ["index.ts", "index.js", "index.mjs", "index.cjs"];
+const EXTENSION_FILE_RE = /\.(?:ts|js|mjs|cjs)$/;
+
+function isBuiltinTool(tool: ToolInfo): boolean {
+  if (tool.sourceInfo?.source) return tool.sourceInfo.source === "builtin";
+  return BUILTIN_TOOL_NAMES.has(tool.name);
+}
+
+function withExtensionTools(inner: AgentSessionLike, toolNames: string[]): string[] {
+  if (toolNames.length === 0) return [];
+  const extensionToolNames = inner
+    .getAllTools()
+    .filter((tool) => !isBuiltinTool(tool))
+    .map((tool) => tool.name);
+  return [...new Set([...toolNames, ...extensionToolNames])];
+}
+
+function setActiveTools(inner: AgentSessionLike, toolNames: string[]): void {
+  inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
+  if (toolNames.length === 0 && inner.agent.state) {
+    inner.agent.state.systemPrompt = "";
+  }
+}
+
+function isExtensionFile(path: string): boolean {
+  return EXTENSION_FILE_RE.test(path) && !path.endsWith(".d.ts");
+}
+
+function collectExtensionPaths(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const stat = statSync(root);
+  if (stat.isFile()) return isExtensionFile(root) ? [root] : [];
+  if (!stat.isDirectory()) return [];
+
+  const collected: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const entryPath = join(root, entry.name);
+    if (entry.isFile() && isExtensionFile(entryPath)) {
+      collected.push(entryPath);
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+
+    const entryFile = EXTENSION_ENTRY_FILES
+      .map((fileName) => join(entryPath, fileName))
+      .find((candidate) => existsSync(candidate));
+    if (entryFile) {
+      collected.push(entryFile);
+    } else if (existsSync(join(entryPath, "package.json"))) {
+      collected.push(entryPath);
+    }
+  }
+  return collected;
+}
+
+function getExtraExtensionPaths(): string[] {
+  const paths = new Set<string>();
+  const webProjectExtensions = join(process.cwd(), ".pi", "extensions");
+  for (const extensionPath of collectExtensionPaths(webProjectExtensions)) {
+    paths.add(extensionPath);
+  }
+
+  const configured = process.env.PI_WEB_EXTENSION_PATHS;
+  if (configured) {
+    for (const rawPath of configured.split(delimiter)) {
+      const trimmed = rawPath.trim();
+      if (!trimmed) continue;
+      paths.add(trimmed.startsWith(".") ? resolve(process.cwd(), trimmed) : trimmed);
+    }
+  }
+
+  return [...paths];
+}
+
+// ============================================================================
+// AgentSessionWrapper
+// Wraps AgentSession with the same interface the rest of the app expects
+// ============================================================================
+
+export class AgentSessionWrapper {
+  private listeners: EventListener[] = [];
+  private unsubscribe: (() => void) | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private onDestroyCallback: (() => void) | null = null;
+  private _alive = true;
+  private _shutdownPromise: Promise<void> | null = null;
+  public readonly inner: AgentSessionLike;
+
+  constructor(inner: AgentSessionLike) { this.inner = inner; }
+
+  // The cwd this session was created/opened with. Set by startRpcSession from
+  // the value the caller already validated. Trusted for ownership checks on a
+  // running session, because the on-disk header's cwd is briefly wrong during
+  // the first turn (pi writes process.cwd() before the real cwd settles).
+  cwd: string = "";
+
+  get sessionId(): string {
+    return this.inner.sessionId;
+  }
+
+  get sessionFile(): string {
+    return this.inner.sessionFile ?? "";
+  }
+
+  isAlive(): boolean {
+    return this._alive;
+  }
+
+  start(): void {
+    this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
+      this.resetIdleTimer();
+      for (const l of this.listeners) l(event);
+    });
+    this.resetIdleTimer();
+  }
+
+  private resetIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      void this.shutdown("quit").catch(() => {
+        process.stderr.write("Agent session idle shutdown failed\n");
+      });
+    }, 10 * 60 * 1000);
+  }
+
+  onEvent(listener: EventListener): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const i = this.listeners.indexOf(listener);
+      if (i !== -1) this.listeners.splice(i, 1);
+    };
+  }
+
+  onDestroy(cb: () => void): void {
+    this.onDestroyCallback = cb;
+  }
+
+  isStreaming(): boolean { return this.inner.isStreaming; }
+
+  async abortForShutdown(): Promise<void> { await this.inner.abort(); }
+
+  shutdown(reason: "quit" = "quit"): Promise<void> {
+    void reason;
+    if (this._shutdownPromise) return this._shutdownPromise;
+    this._shutdownPromise = (async () => {
+      try { await shutdownAgentSession(this.inner); }
+      finally { this.destroy(); }
+    })();
+    return this._shutdownPromise;
+  }
+
+  async send(command: Record<string, unknown>): Promise<unknown> {
+    const type = command.type as string;
+    const deleting = type === "abort" ? false : isCwdDeleting(this.cwd);
+    assertSessionCommandAllowed(this._alive, deleting, type);
+    this.resetIdleTimer();
+
+    switch (type) {
+      case "prompt": {
+        // Fire and forget — events come via subscribe
+        const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        this.inner.prompt(command.message as string, promptImages?.length ? { images: promptImages } : undefined).catch(() => {});
+        return null;
+      }
+
+      case "prompt_command": {
+        const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        await this.inner.prompt(command.message as string, {
+          ...(promptImages?.length ? { images: promptImages } : {}),
+          streamingBehavior: command.streamingBehavior as "steer" | "followUp" | undefined,
+        });
+        return null;
+      }
+
+      case "abort":
+        await this.inner.abort();
+        return null;
+
+      case "get_state": {
+        const model = this.inner.model;
+        const contextUsage = this.inner.getContextUsage();
+        return {
+          sessionId: this.inner.sessionId,
+          sessionFile: this.inner.sessionFile ?? "",
+          isStreaming: this.inner.isStreaming,
+          isCompacting: this.inner.isCompacting,
+          autoCompactionEnabled: this.inner.autoCompactionEnabled,
+          autoRetryEnabled: this.inner.autoRetryEnabled,
+          model: model ? { id: model.id, provider: model.provider } : undefined,
+          messageCount: 0,
+          pendingMessageCount: 0,
+          contextUsage: contextUsage
+            ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
+            : null,
+          systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
+          thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
+        };
+      }
+
+      case "set_model": {
+        const { provider, modelId } = command as { provider: string; modelId: string };
+        const registry = this.inner.modelRegistry;
+        const model = registry.find(provider, modelId);
+        if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+        await this.inner.setModel(model);
+        return { id: model.id, provider: model.provider };
+      }
+
+      case "fork": {
+        const entryId = command.entryId as string;
+        const sessionManager = this.inner.sessionManager;
+        const currentSessionFile = this.inner.sessionFile;
+
+        if (!sessionManager.isPersisted()) return { cancelled: true };
+        if (!currentSessionFile) throw new Error("Persisted session is missing a session file");
+
+        const entry = sessionManager.getEntry(entryId);
+        if (!entry) throw new Error("Invalid entry ID for forking");
+
+        const sessionDir = sessionManager.getSessionDir();
+        let newSessionFile: string;
+
+        if (!entry.parentId) {
+          // Fork before the first message: create an empty session linked to this one
+          const newManager = SessionManager.create(sessionManager.getCwd(), sessionDir);
+          newManager.newSession({ parentSession: currentSessionFile });
+          newSessionFile = newManager.getSessionFile() as string;
+        } else {
+          // Fork after some history: copy path up to (but not including) the fork point
+          const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
+          const forkedPath = sourceManager.createBranchedSession(entry.parentId);
+          if (!forkedPath) throw new Error("Failed to create forked session");
+          newSessionFile = forkedPath;
+        }
+
+        const newSessionId = SessionManager.open(newSessionFile, sessionDir).getSessionId();
+        cacheSessionPath(newSessionId, newSessionFile);
+        await this.shutdown("quit");
+        return { cancelled: false, newSessionId };
+      }
+
+      case "navigate_tree": {
+        const result = await this.inner.navigateTree(command.targetId as string, {});
+        return { cancelled: result.cancelled };
+      }
+
+      case "set_thinking_level": {
+        const level = command.level as string;
+        this.inner.setThinkingLevel(level);
+        // setThinkingLevel clamps xhigh→high for models where supportsXhigh()===false.
+        // If the model has DeepSeek thinking compat (reasoningEffortMap maps xhigh→max),
+        // force the state back so the compat layer can use it correctly.
+        if (level === "xhigh" && (this.inner.model as { compat?: { thinkingFormat?: string } } | null)?.compat?.thinkingFormat === "deepseek" && this.inner.agent?.state) {
+          this.inner.agent.state.thinkingLevel = "xhigh";
+        }
+        return null;
+      }
+
+      case "compact": {
+        // pi's compact() does not guard against empty messagesToSummarize — use findCutPoint
+        // to pre-check and throw a clean error instead of generating a useless empty summary.
+        const { findCutPoint, DEFAULT_COMPACTION_SETTINGS } = await import("@earendil-works/pi-coding-agent");
+        const pathEntries = this.inner.sessionManager.getBranch() as Array<{ type: string }>;
+        const settings = { ...DEFAULT_COMPACTION_SETTINGS, ...this.inner.settingsManager.getCompactionSettings() };
+        let prevCompactionIndex = -1;
+        for (let i = pathEntries.length - 1; i >= 0; i--) {
+          if (pathEntries[i].type === "compaction") { prevCompactionIndex = i; break; }
+        }
+        const boundaryStart = prevCompactionIndex + 1;
+        const cutPoint = findCutPoint(pathEntries as never, boundaryStart, pathEntries.length, settings.keepRecentTokens);
+        const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
+        if (historyEnd <= boundaryStart) {
+          throw new Error("Conversation too short to compact");
+        }
+        const result = await this.inner.compact(command.customInstructions as string | undefined);
+        return result;
+      }
+
+      case "set_auto_compaction": {
+        this.inner.setAutoCompactionEnabled(command.enabled as boolean);
+        return null;
+      }
+
+      case "steer": {
+        const steerImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        await this.inner.steer(command.message as string, steerImages?.length ? steerImages : undefined);
+        return null;
+      }
+
+      case "follow_up": {
+        const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
+        return null;
+      }
+
+      case "get_tools": {
+        const all: ToolInfo[] = this.inner.getAllTools();
+        const active = new Set<string>(this.inner.getActiveToolNames());
+        return all.map((t) => ({
+          name: t.name,
+          description: t.description,
+          active: active.has(t.name),
+        }));
+      }
+
+      case "set_tools": {
+        setActiveTools(this.inner, command.toolNames as string[]);
+        return null;
+      }
+
+      case "abort_compaction": {
+        this.inner.abortCompaction();
+        return null;
+      }
+
+      case "set_auto_retry": {
+        this.inner.setAutoRetryEnabled(command.enabled as boolean);
+        return null;
+      }
+
+      default:
+        throw new Error(`Unsupported command: ${type}`);
+    }
+  }
+
+  destroy(): void {
+    if (!this._alive) return;
+    this._alive = false;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.unsubscribe?.();
+    this.onDestroyCallback?.();
+  }
+}
+
+// ============================================================================
+// Session registry
+// ============================================================================
+
+declare global {
+  var __piSessions: Map<string, AgentSessionWrapper> | undefined;
+  var __piStartLocks: Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> | undefined;
+  var __piDeleteLock: DeleteLock | undefined;
+}
+
+function getDeleteLock(): DeleteLock {
+  if (!globalThis.__piDeleteLock) globalThis.__piDeleteLock = createDeleteLock();
+  return globalThis.__piDeleteLock;
+}
+
+function canon(target: string): string {
+  return canonicalizeExistingPrefix(target || "");
+}
+
+function isCwdDeleting(cwd: string): boolean {
+  return getDeleteLock().isCwdUnderDeletingRoot(canon(cwd));
+}
+
+export function markRootDeleting(rootDir: string): void {
+  getDeleteLock().markRootDeleting(canon(rootDir));
+}
+
+export function unmarkRootDeleting(rootDir: string): void {
+  getDeleteLock().unmarkRootDeleting(canon(rootDir));
+}
+
+export async function waitForStartsUnderRoot(rootDir: string): Promise<void> {
+  return getDeleteLock().waitForStartsUnderRoot(canon(rootDir));
+}
+
+export async function withCwdOperationGuard<T>(
+  cwd: string,
+  body: () => Promise<T>
+): Promise<T> {
+  return getDeleteLock().withStartGuardCanonical(canon(cwd), body);
+}
+
+export async function withStartGuard<T>(cwd: string, body: () => Promise<T>): Promise<T> {
+  return withCwdOperationGuard(cwd, body);
+}
+
+function getRegistry(): Map<string, AgentSessionWrapper> {
+  if (!globalThis.__piSessions) globalThis.__piSessions = new Map();
+  return globalThis.__piSessions;
+}
+
+function getLocks(): Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> {
+  if (!globalThis.__piStartLocks) globalThis.__piStartLocks = new Map();
+  return globalThis.__piStartLocks;
+}
+
+export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
+  return getRegistry().get(sessionId);
+}
+
+export async function abortSessionsUnderCwd(rootDir: string): Promise<number> {
+  const root = canon(rootDir);
+  const registry = getRegistry();
+  let count = 0;
+  let firstError: unknown = null;
+  for (const [, wrapper] of Array.from(registry.entries())) {
+    const cwd = canon(wrapper.cwd || "");
+    if (cwd !== root && !cwd.startsWith(root + path.sep)) continue;
+    try {
+      await abortAndShutdownSession(wrapper);
+    } catch (error) {
+      firstError ??= error;
+    }
+    count++;
+  }
+  if (firstError) throw firstError;
+  return count;
+}
+
+/**
+ * Get or create an AgentSession for the given session.
+ * For new sessions (sessionFile === ""), pi generates its own id.
+ * Pass toolNames to pre-configure active tools (empty array = all tools disabled).
+ */
+export async function startRpcSession(
+  sessionId: string,
+  sessionFile: string,
+  cwd: string,
+  toolNames?: string[]
+): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
+  const registry = getRegistry();
+  const locks = getLocks();
+
+  const canonicalCwd = canon(cwd);
+  const deleteLock = getDeleteLock();
+  if (deleteLock.isCwdUnderDeletingRoot(canonicalCwd)) {
+    throw new Error("用户目录正在删除，拒绝启动或复用会话");
+  }
+
+  const existing = registry.get(sessionId);
+  if (existing?.isAlive()) {
+    getProcessLifecycle().assertAcceptingAgentCommands();
+    return { session: existing, realSessionId: sessionId };
+  }
+
+  const inflight = locks.get(sessionId);
+  if (inflight) return inflight;
+
+  const startKey = deleteLock.nextKey("__start__");
+  const lifecycle = getProcessLifecycle();
+  const finishLifecycleStart = lifecycle.beginSessionStart();
+
+  const starting = (async () => {
+    let wrapper: AgentSessionWrapper | undefined;
+    try {
+      const { SessionManager, getAgentDir, DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
+      const agentDir = getAgentDir();
+
+      const sessionManager = sessionFile
+        ? SessionManager.open(sessionFile, undefined)
+        : SessionManager.create(canonicalCwd, undefined);
+      const extraExtensionPaths = getExtraExtensionPaths();
+      const settingsManager = createSessionSettingsManager(canonicalCwd, agentDir);
+      const resourceLoader = extraExtensionPaths.length > 0
+        ? new DefaultResourceLoader({
+            cwd: canonicalCwd,
+            agentDir,
+            settingsManager,
+            additionalExtensionPaths: extraExtensionPaths,
+          })
+        : undefined;
+      if (resourceLoader) await resourceLoader.reload();
+
+      let toolsOption: string[] | undefined;
+      if (toolNames !== undefined) toolsOption = toolNames.length === 0 ? [] : undefined;
+
+      const { session: inner } = await createAgentSession({
+        cwd: canonicalCwd,
+        agentDir,
+        sessionManager,
+        settingsManager,
+        ...(resourceLoader ? { resourceLoader } : {}),
+        ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+      });
+
+      if (toolNames && toolNames.length > 0) setActiveTools(inner, toolNames);
+      if (toolNames?.length === 0) inner.agent.state.systemPrompt = "";
+
+      wrapper = new AgentSessionWrapper(inner);
+      wrapper.cwd = canonicalCwd;
+      wrapper.start();
+
+      const realSessionId = inner.sessionId as string;
+      const realSessionFile = inner.sessionFile as string | undefined;
+      if (deleteLock.isCwdUnderDeletingRoot(canonicalCwd)) {
+        let cleanupError: unknown = null;
+        try {
+          await abortAndShutdownSession(wrapper);
+        } catch (error) {
+          cleanupError ??= error;
+        }
+        try {
+          if (realSessionFile) {
+            rmSync(realSessionFile, { force: true });
+            invalidateSessionPathCache(realSessionId);
+          }
+        } catch (error) {
+          cleanupError ??= error;
+        }
+        throw createDeleteWindowAbortError(cleanupError);
+      }
+
+      if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
+      lifecycle.assertAcceptingAgentCommands();
+      const unregisterLifecycle = lifecycle.register(wrapper);
+      wrapper.onDestroy(() => {
+        unregisterLifecycle();
+        registry.delete(realSessionId);
+      });
+      registry.set(realSessionId, wrapper);
+      return { session: wrapper, realSessionId };
+    } catch (error) {
+      if (wrapper && error instanceof ProcessDrainingError) await wrapper.shutdown("quit");
+      throw error;
+    } finally {
+      deleteLock.unregisterStart(startKey);
+      finishLifecycleStart();
+    }
+  })().finally(() => locks.delete(sessionId));
+
+  deleteLock.registerStart(startKey, canonicalCwd, starting);
+  locks.set(sessionId, starting);
+  return starting;
+}
+
+installProcessSignalHandlers();

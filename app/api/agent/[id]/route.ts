@@ -1,0 +1,104 @@
+import { NextResponse } from "next/server";
+import {
+  startRpcSession,
+  getRpcSession,
+  withCwdOperationGuard,
+} from "@/lib/rpc-manager";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { checkSessionOwnership, sessionGuardMessage } from "@/lib/auth/session-guard";
+import { setUserModelPreference } from "@/lib/auth/model-preferences";
+import { switchModelAndRemember } from "@/lib/model-selection";
+import { getProcessLifecycle, ProcessDrainingError } from "@/lib/process-lifecycle";
+import { scheduleIndexSessionFile } from "@/lib/session-index/service";
+import { resolveSessionPath } from "@/lib/session-reader";
+
+function drainingResponse() {
+  const admission = getProcessLifecycle().agentAdmission();
+  return admission.allowed ? null : NextResponse.json({ error: admission.error }, { status: admission.status, headers: { "Retry-After": admission.retryAfter } });
+}
+
+// POST /api/agent/[id] - Send a command to an existing session
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const rejected = drainingResponse();
+  if (rejected) return rejected;
+  const { id } = await params;
+
+  const guard = await checkSessionOwnership(req, id);
+  if (!guard.ok) {
+    return NextResponse.json({ error: sessionGuardMessage(guard.status) }, { status: guard.status });
+  }
+
+  try {
+    const body = await req.json() as { type: string; [key: string]: unknown };
+
+    const running = getRpcSession(id);
+    const cwd = running?.isAlive()
+      ? running.cwd
+      : SessionManager.open(guard.filePath).getHeader()?.cwd ?? process.cwd();
+
+    const result = await withCwdOperationGuard(cwd, async () => {
+      getProcessLifecycle().assertAcceptingAgentCommands();
+      let session = getRpcSession(id);
+      if (!session?.isAlive()) {
+        const started = await startRpcSession(id, guard.filePath, cwd);
+        session = started.session;
+      }
+      if (body.type === "set_model") {
+        const provider = typeof body.provider === "string" ? body.provider : "";
+        const modelId = typeof body.modelId === "string" ? body.modelId : "";
+        if (!provider || !modelId) {
+          throw new Error("provider and modelId are required");
+        }
+        const data = await switchModelAndRemember(
+          session,
+          guard.username,
+          provider,
+          modelId,
+          setUserModelPreference
+        );
+        scheduleIndexSessionFile(session.sessionFile || guard.filePath);
+        return data;
+      }
+      const data = await session.send(body);
+      scheduleIndexSessionFile(session.sessionFile || guard.filePath);
+      if (body.type === "fork" && data && typeof data === "object" && "newSessionId" in data) {
+        const forkedPath = await resolveSessionPath(String((data as { newSessionId: unknown }).newSessionId));
+        if (forkedPath) scheduleIndexSessionFile(forkedPath);
+      }
+      return data;
+    });
+
+    return NextResponse.json({ success: true, data: result });
+  } catch (error) {
+    if (error instanceof ProcessDrainingError) return NextResponse.json({ error: error.message }, { status: 503, headers: { "Retry-After": "5" } });
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+
+// GET /api/agent/[id] - Get current agent state
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+
+  const guard = await checkSessionOwnership(req, id);
+  if (!guard.ok) {
+    return NextResponse.json({ error: sessionGuardMessage(guard.status) }, { status: guard.status });
+  }
+
+  try {
+    const session = getRpcSession(id);
+    if (!session || !session.isAlive()) {
+      return NextResponse.json({ running: false });
+    }
+
+    const state = await session.send({ type: "get_state" });
+    return NextResponse.json({ running: true, state });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}

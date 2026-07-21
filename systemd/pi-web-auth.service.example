@@ -1,0 +1,24 @@
+[Unit]
+Description=Pi Agent Web (standalone release, 8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pi-web-auth/current
+EnvironmentFile=/etc/pi-web-auth/release.env
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/pi-web-auth
+Environment=PORT=8000
+Environment=HOSTNAME=0.0.0.0
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/node /opt/pi-web-auth/current/server.js
+ExecStop=/opt/pi-web-auth/current/scripts/systemd-stop.sh
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=65
+SyslogIdentifier=pi-web-auth
+
+[Install]
+WantedBy=default.target
