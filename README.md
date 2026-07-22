@@ -26,6 +26,20 @@ If you need the original single-user local `pi-web` experience, use [`agegr/pi-w
 - Admin console for user management and read-only observability
 - Optional standalone release scripts for production deployments
 
+## Screenshots
+
+### Authenticated Team Entry
+
+![Login screen with keyword-protected registration and password login](./docs/images/login.png)
+
+The login screen is the main entry point for shared deployments. It reflects the fork's added authentication layer, registration gate, role bootstrap flow, and private team access model.
+
+### Models And Tool Presets
+
+![Models and tools settings screen with provider configuration and tool presets](./docs/images/models-tools-settings.png)
+
+The models and tools settings page shows the added operations surface for configuring providers, model availability, compatibility options, and tool presets used by authenticated users in chat.
+
 ## Additions Compared With `agegr/pi-web`
 
 This project started from the public `agegr/pi-web` web UI and adds a multi-user, operations-oriented product layer. The main additions are:

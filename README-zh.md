@@ -28,6 +28,20 @@ Pi coding agent Web UI 的公开多用户 fork。它在 Pi agent runtime 之上�
 - 支持管理员控制台，用于用户管理和只读观测。
 - 提供可选的 standalone 生产发布脚本。
 
+## 项目截图
+
+### 认证团队入口
+
+![带注册邀请码和密码登录的登录页面](./docs/images/login.png)
+
+登录页是共享部署的主要入口，体现了本 fork 新增的认证层、注册邀请码、角色初始化和私有团队访问模式。
+
+### 模型和工具 preset 配置
+
+![包含 provider 配置和工具 preset 的模型与工具设置页面](./docs/images/models-tools-settings.png)
+
+模型和工具设置页展示了新增的运维配置界面，可用于配置 provider、可用模型、兼容性参数，以及认证用户在聊天中使用的工具 preset。
+
 ## 相比 `agegr/pi-web` 的新增内容
 
 本项目从公开的 `agegr/pi-web` Web UI 出发，增加了更适合团队内部部署的产品层：
