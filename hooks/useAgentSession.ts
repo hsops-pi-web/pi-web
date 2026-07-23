@@ -345,12 +345,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [loadSession, onAgentEnd]);
   handleAgentEventRef.current = handleAgentEvent;
 
-  const buildMessageWithFiles = useCallback(async (message: string, cwd: string | undefined, files?: File[]): Promise<string> => {
-    if (!files?.length) return message;
+  const uploadAttachments = useCallback(async (cwd: string | undefined, files?: File[]): Promise<string> => {
+    if (!files?.length) return "";
     if (!cwd) throw new Error("缺少工作目录，无法上传文件");
     const paths = await uploadFiles(cwd, files);
     const note = `[附件]\n${paths.map((p) => `- ${p}`).join("\n")}`;
-    return message.trim() ? `${message}\n\n${note}` : note;
+    return note;
   }, []);
 
   const isSlashCommand = useCallback((message: string): boolean => message.trimStart().startsWith("/"), []);
@@ -362,7 +362,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const cwd = isNew ? newSessionCwd : session?.cwd;
     let finalMessage: string;
     try {
-      finalMessage = await buildMessageWithFiles(message, cwd ?? undefined, files);
+      const attachmentNote = await uploadAttachments(cwd ?? undefined, files);
+      finalMessage = attachmentNote ? (message.trim() ? `${message}\n\n${attachmentNote}` : attachmentNote) : message;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
@@ -436,7 +437,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
       return false;
     }
-  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, buildMessageWithFiles, connectEvents, onSessionCreated]);
+  }, [isNew, newSessionCwd, newSessionModel, toolPreset, thinkingLevel, session, agentRunning, uploadAttachments, connectEvents, onSessionCreated]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -522,7 +523,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return false;
     let finalMessage: string;
     try {
-      finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
+      const attachmentNote = await uploadAttachments(session?.cwd, files);
+      finalMessage = attachmentNote ? (message.trim() ? `${message}\n\n${attachmentNote}` : attachmentNote) : message;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
@@ -551,14 +553,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-  }, [buildMessageWithFiles, isSlashCommand, session?.cwd]);
+  }, [isSlashCommand, session?.cwd, uploadAttachments]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[], files?: File[]) => {
     const sid = sessionIdRef.current;
     if (!sid) return false;
     let finalMessage: string;
     try {
-      finalMessage = await buildMessageWithFiles(message, session?.cwd, files);
+      const attachmentNote = await uploadAttachments(session?.cwd, files);
+      finalMessage = attachmentNote ? (message.trim() ? `${message}\n\n${attachmentNote}` : attachmentNote) : message;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
@@ -586,7 +589,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-  }, [buildMessageWithFiles, isSlashCommand, session?.cwd]);
+  }, [isSlashCommand, session?.cwd, uploadAttachments]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;

@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import { getFileIcon } from "@/components/FileIcons";
-import { ACCEPT_ATTR, DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, formatBytes, isAcceptedDoc, type AttachedFile } from "@/lib/upload";
+import { ACCEPT_ATTR, DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, formatBytes, isAcceptedUpload, type AttachedFile } from "@/lib/upload";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -108,28 +108,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     setAttachedImages((prev) => [...prev, ...newImages]);
   }, []);
 
-  const processDocFiles = useCallback((files: File[]) => {
-    const docFiles = files.filter((f) => !f.type.startsWith("image/") && isAcceptedDoc(f.name));
-    const rejected = files.filter((f) => !f.type.startsWith("image/") && !isAcceptedDoc(f.name));
-    if (rejected.length) {
-      setFileError(`不支持的文件类型：${rejected.map((f) => f.name).join("、")}`);
+  const processUploadFiles = useCallback((files: File[]) => {
+    const accepted = files.filter((f) => isAcceptedUpload(f));
+    const unsupported = files.filter((f) => !isAcceptedUpload(f));
+    if (unsupported.length) {
+      setFileError(`不支持的文件类型：${unsupported.map((f) => f.name).join("、")}`);
     }
-    if (!docFiles.length) return;
-
-    const maxBytes = DEFAULT_MAX_FILE_MB * 1024 * 1024;
-    const tooBig = docFiles.filter((f) => f.size > maxBytes);
-    if (tooBig.length) {
-      setFileError(`文件超过 ${DEFAULT_MAX_FILE_MB}MB：${tooBig.map((f) => f.name).join("、")}`);
-    }
-    const accepted = docFiles.filter((f) => f.size <= maxBytes);
     if (!accepted.length) return;
+    const maxBytes = DEFAULT_MAX_FILE_MB * 1024 * 1024;
+    const rejected = accepted.filter((f) => f.size > maxBytes);
+    if (rejected.length) {
+      setFileError(`文件超过 ${DEFAULT_MAX_FILE_MB}MB：${rejected.map((f) => f.name).join("、")}`);
+    }
+
+    const safe = accepted.filter((f) => f.size <= maxBytes);
+    if (!safe.length) return;
 
     setAttachedFiles((prev) => {
       const room = DEFAULT_MAX_COUNT - prev.length;
-      if (accepted.length > room) {
+      if (safe.length > room) {
         setFileError(`最多 ${DEFAULT_MAX_COUNT} 个文件`);
       }
-      const next = accepted.slice(0, Math.max(0, room)).map((file) => ({ file, name: file.name, size: file.size }));
+      const next = safe.slice(0, Math.max(0, room)).map((file) => ({ file, name: file.name, size: file.size }));
       return [...prev, ...next];
     });
   }, []);
@@ -173,10 +173,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       processImageFiles(files);
     },
     addFiles(files: File[]) {
-      const images = files.filter((f) => f.type.startsWith("image/"));
-      const docs = files.filter((f) => !f.type.startsWith("image/"));
-      if (images.length) processImageFiles(images);
-      if (docs.length) processDocFiles(docs);
+      processUploadFiles(files);
     },
   }));
 
@@ -337,10 +334,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         style={{ display: "none" }}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
-          const images = files.filter((f) => f.type.startsWith("image/"));
-          const docs = files.filter((f) => !f.type.startsWith("image/"));
-          if (images.length) processImageFiles(images);
-          if (docs.length) processDocFiles(docs);
+          processUploadFiles(files);
           e.target.value = "";
         }}
       />

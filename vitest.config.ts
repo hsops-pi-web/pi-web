@@ -12,6 +12,7 @@ export default defineConfig({
     include: [
       "__tests__/components/**/*.test.{ts,tsx}",
       "__tests__/hooks/**/*.test.ts",
+      "__tests__/app/**/*.test.ts",
       "__tests__/lib/recent-cwds-storage.test.ts",
     ],
     clearMocks: true,

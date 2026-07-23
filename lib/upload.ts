@@ -33,6 +33,10 @@ export function isAcceptedDoc(name: string): boolean {
   return (ACCEPTED_DOC_EXTENSIONS as readonly string[]).includes(extOf(name));
 }
 
+export function isAcceptedUpload(file: File): boolean {
+  return file.type.startsWith("image/") || isAcceptedDoc(file.name);
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;

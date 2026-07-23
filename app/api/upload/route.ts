@@ -3,7 +3,7 @@ import { writeFile } from "fs/promises";
 import { homedir } from "os";
 import path from "path";
 import { NextResponse } from "next/server";
-import { DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, isAcceptedDoc } from "@/lib/upload";
+import { DEFAULT_MAX_COUNT, DEFAULT_MAX_FILE_MB, isAcceptedUpload } from "@/lib/upload";
 import { getSessionUser } from "@/lib/auth/session";
 import { resolveExistingAndCheck } from "@/lib/auth/paths";
 
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
 
     const limit = maxFileBytes();
     for (const file of files) {
-      if (!isAcceptedDoc(file.name)) {
+      if (!isAcceptedUpload(file)) {
         return NextResponse.json({ error: `Unsupported file type: ${file.name}` }, { status: 400 });
       }
       if (file.size > limit) {
