@@ -3,6 +3,9 @@
   "version": "0.6.12",
   "description": "Web UI for the pi coding agent",
   "license": "MIT",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "bin": {
     "pi-web": "bin/pi-web.js"
   },

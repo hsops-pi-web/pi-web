@@ -230,7 +230,7 @@ test("release metadata requires the complete immutable manifest", async () => {
       releaseId: "20260713-160000-05816e7",
       commit: "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86",
       builtAt: "2026-07-13T08:00:00.000Z",
-      nodeVersion: "v22.20.0",
+      nodeVersion: "v24.17.0",
       appVersion: "0.6.12",
       piVersion: "0.75.5",
     }));

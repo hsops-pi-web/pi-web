@@ -101,7 +101,7 @@
   "releaseId": "20260713-160000-05816e7",
   "commit": "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86",
   "builtAt": "2026-07-13T08:00:00.000Z",
-  "nodeVersion": "v22.20.0",
+  "nodeVersion": "v24.17.0",
   "appVersion": "0.6.12",
   "piVersion": "0.75.5"
 }
@@ -262,8 +262,8 @@ Environment=NODE_ENV=production
 Environment=HOME=/home/hsops
 Environment=PORT=8000
 Environment=HOSTNAME=0.0.0.0
-Environment=PATH=/home/hsops/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
+Environment=PATH=/home/hsops/.nvm/versions/node/v24.17.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/hsops/.nvm/versions/node/v24.17.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
 ExecStop=/home/hsops/pi-web-auth-deploy/current/scripts/systemd-stop.sh
 Restart=on-failure
 RestartSec=3

@@ -11,8 +11,8 @@ Environment=NODE_ENV=production
 Environment=HOME=/home/hsops
 Environment=PORT=8000
 Environment=HOSTNAME=0.0.0.0
-Environment=PATH=/home/hsops/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
+Environment=PATH=/home/hsops/.nvm/versions/node/v24.17.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/hsops/.nvm/versions/node/v24.17.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
 ExecStop=/home/hsops/pi-web-auth-deploy/current/scripts/systemd-stop.sh
 Restart=on-failure
 RestartSec=3
