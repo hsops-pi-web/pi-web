@@ -8,7 +8,7 @@
 
 **Architecture:** Next.js 以 `output: "standalone"` 构建到不可变 release，生产 systemd 只运行 `/home/hsops/pi-web-auth-deploy/current/server.js`。应用内进程生命周期协调器负责拒绝新写请求、等待/中止活跃回复并关闭扩展；发布脚本负责锁、在线预备份、60 秒预算、软链接切换、连续健康检查和程序回滚。认证 SQLite 通过 better-sqlite3 backup API 生成一致快照，大目录通过停机前预复制和停机内增量 rsync 缩短中断时间。
 
-**Tech Stack:** Next.js 16 App Router、React 19、TypeScript、Node.js 22、better-sqlite3、node:test、Vitest + jsdom、Bash、rsync、systemd user service、GitHub Actions。
+**Tech Stack:** Next.js 16 App Router、React 19、TypeScript、Node.js 24、better-sqlite3、node:test、Vitest + jsdom、Bash、rsync、systemd user service、GitHub Actions。
 
 **Status:** Execution-ready after the confirmed one-time legacy stop exception below.
 
@@ -293,7 +293,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.20.0
+          node-version: 24.17.0
           cache: npm
       - run: sudo apt-get update && sudo apt-get install -y rsync
       - run: npm ci
@@ -1140,7 +1140,7 @@ test("release metadata requires the complete immutable manifest", async () => {
       releaseId: "20260713-160000-05816e7",
       commit: "05816e7fd19a35dc1b7d9f96460acb2f57e5bd86",
       builtAt: "2026-07-13T08:00:00.000Z",
-      nodeVersion: "v22.20.0",
+      nodeVersion: "v24.17.0",
       appVersion: "0.6.12",
       piVersion: "0.75.5",
     }));
@@ -1426,8 +1426,8 @@ set -Eeuo pipefail
 SOURCE_ROOT=${PI_WEB_SOURCE_ROOT:-/home/hsops/pi-web-auth}
 DEPLOY_ROOT=${PI_WEB_DEPLOY_ROOT:-/home/hsops/pi-web-auth-deploy}
 BACKUP_ROOT=${PI_WEB_BACKUP_ROOT:-/home/hsops/pi-web-auth-backups}
-NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/node}
-NPM_BIN=${PI_WEB_NPM_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/npm}
+NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/node}
+NPM_BIN=${PI_WEB_NPM_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/npm}
 SYSTEMCTL_BIN=${PI_WEB_SYSTEMCTL_BIN:-systemctl}
 CURL_BIN=${PI_WEB_CURL_BIN:-curl}
 RSYNC_BIN=${PI_WEB_RSYNC_BIN:-rsync}
@@ -2077,7 +2077,7 @@ umask 077
 BACKUP_ROOT=${PI_WEB_BACKUP_ROOT:-/home/hsops/pi-web-auth-backups}
 HOME_ROOT=${PI_WEB_PRODUCTION_HOME:-/home/hsops}
 SYSTEMCTL_BIN=${PI_WEB_SYSTEMCTL_BIN:-systemctl}
-NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/node}
+NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/node}
 RSYNC_BIN=${PI_WEB_RSYNC_BIN:-rsync}
 DRY_RUN=true
 [[ "${1:-}" == "--apply" ]] && { DRY_RUN=false; shift; }
@@ -2885,8 +2885,8 @@ Environment=NODE_ENV=production
 Environment=HOME=/home/hsops
 Environment=PORT=8000
 Environment=HOSTNAME=0.0.0.0
-Environment=PATH=/home/hsops/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
+Environment=PATH=/home/hsops/.nvm/versions/node/v24.17.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/hsops/.nvm/versions/node/v24.17.0/bin/node /home/hsops/pi-web-auth-deploy/current/server.js
 ExecStop=/home/hsops/pi-web-auth-deploy/current/scripts/systemd-stop.sh
 Restart=on-failure
 RestartSec=3

@@ -6,6 +6,8 @@
 
 ## 本地源码启动
 
+本项目当前统一使用 Node.js `>=24 <25`，已验证版本为 `v24.17.0`。不要复用由其他 Node major 安装出的 `node_modules`，`better-sqlite3` 等原生依赖会出现 ABI 不匹配。
+
 安装依赖：
 
 ```bash
@@ -21,7 +23,7 @@ npm run dev   # http://localhost:8000
 生产机的 8000 端口由 `pi-web-auth.service` 使用。隔离开发应使用独立 HOME 和其他端口，例如：
 
 ```bash
-HOME=/home/hsops/.pi-admin-dev-home npm run dev -- -p 8133
+HOME=/home/hsops/.pi-admin-dev-home npm run dev -- -p 8144
 ```
 
 生产模式需要先生成 `.next/` 构建产物：
@@ -156,7 +158,7 @@ Type=simple
 WorkingDirectory=/home/hsops/pi-web-auth
 Environment=NODE_ENV=production
 Environment=REGISTER_KEYWORD=replace-with-registration-keyword
-ExecStart=/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth/node_modules/next/dist/bin/next start -p 8000
+ExecStart=/home/hsops/.nvm/versions/node/v24.17.0/bin/node /home/hsops/pi-web-auth/node_modules/next/dist/bin/next start -p 8000
 Restart=on-failure
 RestartSec=3
 KillSignal=SIGTERM

@@ -36,7 +36,7 @@ function executable(path: string, body: string): void {
 function run(script: string, env: Record<string, string> = {}) {
   return spawnSync("bash", [script], {
     cwd: resolve("."),
-    env: { ...process.env, HOME: tempRoot(), NODE_ENV: "test", ...env },
+    env: { ...process.env, HOME: tempRoot(), NODE_ENV: "test", PI_WEB_NODE_BIN: process.execPath, PI_WEB_NPM_BIN: process.env.npm_execpath ?? "npm", ...env },
     encoding: "utf8",
   });
 }

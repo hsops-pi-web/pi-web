@@ -5,8 +5,8 @@ set -Eeuo pipefail
 SOURCE_ROOT=${PI_WEB_SOURCE_ROOT:-/home/hsops/pi-web-auth}
 DEPLOY_ROOT=${PI_WEB_DEPLOY_ROOT:-/home/hsops/pi-web-auth-deploy}
 BACKUP_ROOT=${PI_WEB_BACKUP_ROOT:-/home/hsops/pi-web-auth-backups}
-NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/node}
-NPM_BIN=${PI_WEB_NPM_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/npm}
+NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/node}
+NPM_BIN=${PI_WEB_NPM_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/npm}
 SYSTEMCTL_BIN=${PI_WEB_SYSTEMCTL_BIN:-systemctl}
 CURL_BIN=${PI_WEB_CURL_BIN:-curl}
 RSYNC_BIN=${PI_WEB_RSYNC_BIN:-rsync}

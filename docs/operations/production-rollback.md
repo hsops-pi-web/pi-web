@@ -60,7 +60,7 @@ The script prompts for the complete backup ID before writing data. It validates 
 After restore, validate counts before starting service:
 
 ```bash
-/home/hsops/.nvm/versions/node/v22.20.0/bin/node /home/hsops/pi-web-auth/scripts/backup-production.mjs validate \
+/home/hsops/.nvm/versions/node/v24.17.0/bin/node /home/hsops/pi-web-auth/scripts/backup-production.mjs validate \
   --backup-root /home/hsops/pi-web-auth-backups \
   --backup-id <backup-id>
 find /home/hsops/.pi/agent -type f -name '*.jsonl' | wc -l

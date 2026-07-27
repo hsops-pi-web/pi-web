@@ -5,7 +5,7 @@ umask 077
 BACKUP_ROOT=${PI_WEB_BACKUP_ROOT:-/home/hsops/pi-web-auth-backups}
 HOME_ROOT=${PI_WEB_PRODUCTION_HOME:-/home/hsops}
 SYSTEMCTL_BIN=${PI_WEB_SYSTEMCTL_BIN:-systemctl}
-NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v22.20.0/bin/node}
+NODE_BIN=${PI_WEB_NODE_BIN:-/home/hsops/.nvm/versions/node/v24.17.0/bin/node}
 RSYNC_BIN=${PI_WEB_RSYNC_BIN:-rsync}
 DRY_RUN=true
 [[ "${1:-}" == "--apply" ]] && { DRY_RUN=false; shift; }
