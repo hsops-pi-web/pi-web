@@ -29,6 +29,9 @@ const nextConfig: NextConfig = {
     "better-sqlite3",
   ],
   allowedDevOrigins: ['192.168.*.*', '10.16.49.16'],
+  experimental: {
+    proxyClientMaxBodySize: "50mb",
+  },
   env: {
     NEXT_PUBLIC_APP_VERSION: version,
     NEXT_PUBLIC_PI_VERSION: piVersion,
