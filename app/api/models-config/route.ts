@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { requireAdmin } from "@/lib/auth/session";
-import { normalizeModelsConfig, normalizeModelsConfigFile } from "@/lib/models-config";
+import { findStaleDefaultModel, normalizeModelsConfig, normalizeModelsConfigFile } from "@/lib/models-config";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,15 @@ export async function PUT(req: Request) {
     const { config } = normalizeModelsConfig(body);
     writeModelsJson(config);
     // Model registry refreshes on each /api/models request (no local cache to invalidate)
-    return NextResponse.json({ success: true });
+    const settings = SettingsManager.create(process.cwd(), getAgentDir());
+    const stale = findStaleDefaultModel(config, {
+      provider: settings.getDefaultProvider() ?? null,
+      modelId: settings.getDefaultModel() ?? null,
+    });
+    const warning = stale
+      ? `默认模型 ${stale.provider}${stale.modelId ? `/${stale.modelId}` : ""} 已不在配置中，请重新设置默认模型`
+      : undefined;
+    return NextResponse.json({ success: true, ...(warning ? { warning } : {}) });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

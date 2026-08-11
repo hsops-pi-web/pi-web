@@ -26,6 +26,7 @@ interface Props {
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
+  modelError?: string | null;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -63,7 +64,7 @@ const THINKING_LEVEL_DESC: Record<typeof THINKING_LEVELS[number], string> = {
 };
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, modelNames, modelList, onModelChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, modelNames, modelList, onModelChange, modelError,
   onCompact, onAbortCompaction, isCompacting, compactError, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo,
@@ -601,6 +602,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {/* Model selector — visible always, disabled during streaming */}
             {modelOptions.length > 0 && currentName && onModelChange && (
                 <div ref={dropdownRef} style={{ position: "relative" }}>
+                  {modelError && (
+                    <div style={{
+                      position: "absolute", bottom: "calc(100% + 6px)", left: 0,
+                      background: "#1f2937", color: "#f87171",
+                      fontSize: 11, padding: "4px 8px", borderRadius: 5,
+                      maxWidth: 260, pointerEvents: "none",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 50,
+                    }}>
+                      {modelError}
+                    </div>
+                  )}
                   <button
                     onClick={(e) => {
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();

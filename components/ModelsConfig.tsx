@@ -1246,6 +1246,7 @@ export function ModelsConfig({ onClose = () => undefined, embedded = false }: { 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
@@ -1390,6 +1391,7 @@ export function ModelsConfig({ onClose = () => undefined, embedded = false }: { 
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
+    setSaveWarning(null);
     setSavedOk(false);
     try {
       const res = await authFetch("/api/models-config", {
@@ -1397,10 +1399,11 @@ export function ModelsConfig({ onClose = () => undefined, embedded = false }: { 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
-      const d = await res.json() as { success?: boolean; error?: string };
+      const d = await res.json() as { success?: boolean; error?: string; warning?: string };
       if (!res.ok || d.error) setSaveError(d.error ?? `HTTP ${res.status}`);
       else {
         await loadModelDefaults();
+        if (d.warning) setSaveWarning(d.warning);
         setSavedOk(true);
         setTimeout(() => setSavedOk(false), 2000);
       }
@@ -1702,6 +1705,7 @@ export function ModelsConfig({ onClose = () => undefined, embedded = false }: { 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, padding: "10px 18px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
           {saveError && <span style={{ fontSize: 12, color: "#f87171", flex: 1 }}>{saveError}</span>}
+          {!saveError && saveWarning && <span style={{ fontSize: 12, color: "#fbbf24", flex: 1 }}>{saveWarning}</span>}
           {!embedded && <button onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
             Cancel
           </button>}

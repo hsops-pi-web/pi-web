@@ -1,4 +1,4 @@
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { existsSync, readdirSync, rmSync, statSync } from "fs";
 import path, { delimiter, join, resolve } from "path";
 import { cacheSessionPath, invalidateSessionPathCache } from "./session-reader";
@@ -17,6 +17,8 @@ import {
   type DeleteLock,
 } from "./auth/delete-lock";
 import { canonicalizeExistingPrefix } from "./auth/paths";
+import { resolveModelWithRefresh } from "./model-selection";
+import { readModelsConfigMtimeMs } from "./models-config";
 import { createSessionSettingsManager } from "./session-settings";
 
 // ============================================================================
@@ -112,6 +114,10 @@ function getExtraExtensionPaths(): string[] {
 // Wraps AgentSession with the same interface the rest of the app expects
 // ============================================================================
 
+function currentModelsConfigMtimeMs(): number {
+  return readModelsConfigMtimeMs(join(getAgentDir(), "models.json"), { statSync });
+}
+
 export class AgentSessionWrapper {
   private listeners: EventListener[] = [];
   private unsubscribe: (() => void) | null = null;
@@ -119,9 +125,14 @@ export class AgentSessionWrapper {
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
   private _shutdownPromise: Promise<void> | null = null;
+  // models.json stamp the session's model registry was built from.
+  private modelsConfigMtimeMs: number;
   public readonly inner: AgentSessionLike;
 
-  constructor(inner: AgentSessionLike) { this.inner = inner; }
+  constructor(inner: AgentSessionLike) {
+    this.inner = inner;
+    this.modelsConfigMtimeMs = currentModelsConfigMtimeMs();
+  }
 
   // The cwd this session was created/opened with. Set by startRpcSession from
   // the value the caller already validated. Trusted for ownership checks on a
@@ -234,9 +245,14 @@ export class AgentSessionWrapper {
 
       case "set_model": {
         const { provider, modelId } = command as { provider: string; modelId: string };
-        const registry = this.inner.modelRegistry;
-        const model = registry.find(provider, modelId);
-        if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+        const mtimeMs = currentModelsConfigMtimeMs();
+        const model = resolveModelWithRefresh(
+          this.inner.modelRegistry,
+          provider,
+          modelId,
+          mtimeMs !== this.modelsConfigMtimeMs
+        );
+        this.modelsConfigMtimeMs = mtimeMs;
         await this.inner.setModel(model);
         return { id: model.id, provider: model.provider };
       }

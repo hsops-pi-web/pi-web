@@ -125,6 +125,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
+  // Kept separate from `error`: ChatWindow replaces the whole chat with a
+  // full-page message when `error` is set, and a failed model switch must not
+  // take the conversation down with it.
+  const [modelError, setModelError] = useState<string | null>(null);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const [modelsLoadKey, setModelsLoadKey] = useState(0);
 
@@ -495,10 +499,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     try {
+      setModelError(null);
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
       setCurrentModelOverride({ provider, modelId });
     } catch (e) {
       console.error("Failed to set model:", e);
+      setModelError(e instanceof Error ? e.message : String(e));
     }
   }, [isNew, setNewSessionModel]);
 
@@ -732,7 +738,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
-    isCompacting, compactError, currentModel, displayModel, sessionStats,
+    isCompacting, compactError, modelError, currentModel, displayModel, sessionStats,
     agentPhase,
     isNew,
     // Refs
