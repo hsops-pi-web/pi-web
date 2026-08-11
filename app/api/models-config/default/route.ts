@@ -8,6 +8,7 @@ import {
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { requireAdmin } from "@/lib/auth/session";
+import { isModelConfigured } from "@/lib/model-list";
 import { normalizeModelsConfigFile } from "@/lib/models-config";
 
 export const dynamic = "force-dynamic";
@@ -28,12 +29,20 @@ export async function PUT(req: Request) {
     }
 
     const agentDir = getAgentDir();
-    normalizeModelsConfigFile(join(agentDir, "models.json"), { existsSync, readFileSync, writeFileSync });
+    const modelsConfig = normalizeModelsConfigFile(join(agentDir, "models.json"), { existsSync, readFileSync, writeFileSync });
     const registry = ModelRegistry.create(AuthStorage.create());
     const model = registry.find(provider, modelId);
     if (!model || !registry.hasConfiguredAuth(model)) {
       return NextResponse.json(
         { error: "模型不存在或未配置鉴权" },
+        { status: 400 }
+      );
+    }
+    // The picker only offers configured models; keep the API from setting a
+    // built-in one that nobody can select back.
+    if (!isModelConfigured(modelsConfig, provider, modelId)) {
+      return NextResponse.json(
+        { error: "该模型不在模型配置中，请先在 models 配置里添加" },
         { status: 400 }
       );
     }

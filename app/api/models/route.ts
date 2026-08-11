@@ -5,6 +5,7 @@ import { join } from "path";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import {
+  filterToConfiguredModels,
   getConfiguredModelKeys,
   orderAvailableModels,
   type ModelListEntry,
@@ -32,43 +33,45 @@ export async function GET(req: Request) {
   try {
     const agentDir = getAgentDir();
     const modelsConfigPath = join(agentDir, "models.json");
-    normalizeModelsConfigFile(modelsConfigPath, { existsSync, readFileSync, writeFileSync });
+    const modelsConfig = normalizeModelsConfigFile(modelsConfigPath, { existsSync, readFileSync, writeFileSync });
+    const configuredModelKeys = getConfiguredModelKeys(modelsConfig);
+
     const authStorage = AuthStorage.create();
     const registry = ModelRegistry.create(authStorage);
     const available = registry.getAvailable();
-    const availableModels: ModelListEntry[] = available.map((m: { id: string; name: string; provider: string }) => ({
-      id: m.id,
-      name: m.name,
-      provider: m.provider,
-    }));
+
+    // Thinking levels stay unfiltered: a session still running an unconfigured
+    // model needs its levels to resolve.
     for (const m of available) {
       const key = `${m.provider}:${m.id}`;
-      nameMap.set(key, m.name);
       thinkingLevels[key] = getSupportedThinkingLevels(m);
       if (m.thinkingLevelMap) thinkingLevelMaps[key] = m.thinkingLevelMap;
     }
+
+    const visibleModels: ModelListEntry[] = filterToConfiguredModels(
+      available.map((m: { id: string; name: string; provider: string }) => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+      })),
+      configuredModelKeys
+    );
+    for (const m of visibleModels) nameMap.set(`${m.provider}:${m.id}`, m.name);
 
     const settings = SettingsManager.create(process.cwd(), agentDir);
     const provider = settings.getDefaultProvider();
     const modelId = settings.getDefaultModel();
     if (provider) {
-      const providerFallback = availableModels.find((model) => model.provider === provider);
+      const providerFallback = visibleModels.find((model) => model.provider === provider);
       globalDefaultModel = { provider, modelId: modelId ?? providerFallback?.id ?? "" };
     }
     defaultModel = resolveEffectiveDefault(
-      availableModels,
+      visibleModels,
       getUserModelPreference(username),
       globalDefaultModel
     );
 
-    let configuredModelKeys: string[] = [];
-    try {
-      const modelsConfig = JSON.parse(readFileSync(modelsConfigPath, "utf8"));
-      configuredModelKeys = getConfiguredModelKeys(modelsConfig);
-    } catch {
-      // Missing or invalid models.json leaves the registry order unchanged.
-    }
-    modelList = orderAvailableModels(availableModels, defaultModel, configuredModelKeys);
+    modelList = orderAvailableModels(visibleModels, defaultModel, configuredModelKeys);
   } catch { /* return empty */ }
 
   return Response.json({

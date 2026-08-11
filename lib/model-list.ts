@@ -31,6 +31,25 @@ export function getConfiguredModelKeys(config: unknown): string[] {
   return keys;
 }
 
+// The registry also serves pi's built-in model table, which passes its auth check
+// from an ambient OPENAI_API_KEY and floods the picker with models nobody
+// configured. Only what models.json declares is offered.
+export function filterToConfiguredModels<T extends ModelListEntry>(
+  available: readonly T[],
+  configuredModelKeys: readonly string[]
+): T[] {
+  const configured = new Set(configuredModelKeys);
+  return available.filter((model) => configured.has(modelKey(model.provider, model.id)));
+}
+
+export function isModelConfigured(
+  config: unknown,
+  provider: string,
+  modelId: string
+): boolean {
+  return getConfiguredModelKeys(config).includes(modelKey(provider, modelId));
+}
+
 export function orderAvailableModels<T extends ModelListEntry>(
   available: readonly T[],
   defaultModel: DefaultModelRef | null,
